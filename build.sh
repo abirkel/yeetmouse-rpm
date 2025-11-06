@@ -218,24 +218,27 @@ report_results() {
     # List all generated files
     local rpm_count=0
     local spec_count=0
+    local log_count=0
     
     log_info "Generated files:"
     
-    # Count and list RPM files
-    for rpm in "${OUTPUT_DIR}"/*.rpm; do
-        if [[ -f "${rpm}" ]]; then
-            log_info "  [RPM] $(basename "${rpm}")"
-            ((rpm_count++))
-        fi
-    done
+    # Count and list RPM files using find to ensure we get all files
+    while IFS= read -r rpm; do
+        log_info "  [RPM] $(basename "${rpm}")"
+        ((rpm_count++))
+    done < <(find "${OUTPUT_DIR}" -maxdepth 1 -name "*.rpm" -type f | sort)
     
     # Count and list spec files
-    for spec in "${OUTPUT_DIR}"/*.spec; do
-        if [[ -f "${spec}" ]]; then
-            log_info "  [SPEC] $(basename "${spec}")"
-            ((spec_count++))
-        fi
-    done
+    while IFS= read -r spec; do
+        log_info "  [SPEC] $(basename "${spec}")"
+        ((spec_count++))
+    done < <(find "${OUTPUT_DIR}" -maxdepth 1 -name "*.spec" -type f | sort)
+    
+    # Count and list log files
+    while IFS= read -r logfile; do
+        log_info "  [LOG] $(basename "${logfile}")"
+        ((log_count++))
+    done < <(find "${OUTPUT_DIR}" -maxdepth 1 -name "*-rpmbuild.log" -type f | sort)
     
     # List metadata file if present
     if [[ -f "${OUTPUT_DIR}/build-metadata.txt" ]]; then
@@ -246,6 +249,7 @@ report_results() {
     log_info "Summary:"
     log_info "  RPM packages: ${rpm_count}"
     log_info "  Spec files: ${spec_count}"
+    log_info "  Build logs: ${log_count}"
     log_info ""
     
     # Display build metadata if available

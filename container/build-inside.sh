@@ -160,8 +160,8 @@ Release:        %{RELEASE_NUMBER}%{?dist}
 Summary:        Kernel module for YeetMouse mouse acceleration
 License:        GPL-2.0-or-later
 
-URL:            https://github.com/l1mey112/yeetmouse
-Source0:        https://github.com/l1mey112/yeetmouse/archive/refs/tags/v%{version}.tar.gz
+URL:            https://github.com/AndyFilter/YeetMouse
+Source0:        https://github.com/AndyFilter/YeetMouse/archive/refs/tags/v%{version}.tar.gz
 
 BuildRequires:  kernel-devel
 BuildRequires:  gcc
@@ -223,8 +223,8 @@ Release:        %{RELEASE_NUMBER}%{?dist}
 Summary:        Kernel module for YeetMouse mouse acceleration
 License:        GPL-2.0-or-later
 
-URL:            https://github.com/l1mey112/yeetmouse
-Source0:        https://github.com/l1mey112/yeetmouse/archive/refs/tags/v%{version}.tar.gz
+URL:            https://github.com/AndyFilter/YeetMouse
+Source0:        https://github.com/AndyFilter/YeetMouse/archive/refs/tags/v%{version}.tar.gz
 
 BuildRequires:  kernel-devel = %{KERNEL_VERSION}
 BuildRequires:  gcc
@@ -274,6 +274,133 @@ sed -i "s/%{KERNEL_VERSION}/$KERNEL_VERSION/g" "$KMOD_SPEC"
 
 log_info "Kmod spec file generated: $KMOD_SPEC"
 
+# Generate GUI spec file
+log_info "Generating GUI spec file..."
+
+# Create GUI spec file
+GUI_SPEC="$OUTPUT_DIR/yeetmouse-gui.spec"
+cat > "$GUI_SPEC" <<'SPEC_EOF'
+Name:           yeetmouse-gui
+Version:        %{YEETMOUSE_VERSION}
+Release:        %{RELEASE_NUMBER}%{?dist}
+Summary:        GUI application for YeetMouse mouse acceleration configuration
+License:        GPL-2.0-or-later
+
+URL:            https://github.com/AndyFilter/YeetMouse
+Source0:        https://github.com/AndyFilter/YeetMouse/archive/refs/tags/v%{version}.tar.gz
+
+BuildRequires:  gcc-c++
+BuildRequires:  make
+BuildRequires:  glfw-devel
+BuildRequires:  mesa-libGL-devel
+
+Requires:       glfw
+Requires:       mesa-libGL
+
+%description
+YeetMouse GUI is a graphical configuration tool for the YeetMouse kernel module.
+It provides an intuitive interface for configuring mouse acceleration parameters,
+custom curves, and other settings.
+
+%prep
+%setup -q -n yeetmouse-%{version}
+
+%build
+cd gui
+make
+
+%install
+mkdir -p %{buildroot}%{_bindir}
+install -m 755 gui/YeetMouseGui %{buildroot}%{_bindir}/yeetmouse-gui
+
+%files
+%{_bindir}/yeetmouse-gui
+
+%post
+echo "YeetMouse GUI installed successfully"
+echo "Run 'yeetmouse-gui' to configure YeetMouse settings"
+
+%changelog
+* %{RELEASE_DATE} YeetMouse Builder <builder@yeetmouse.local> - %{version}-%{RELEASE_NUMBER}
+- Automated build from YeetMouse repository (git commit %{GIT_HASH})
+
+SPEC_EOF
+
+# Replace template variables in spec file
+sed -i "s/%{YEETMOUSE_VERSION}/$YEETMOUSE_VERSION/g" "$GUI_SPEC"
+sed -i "s/%{RELEASE_NUMBER}/$RELEASE_NUMBER/g" "$GUI_SPEC"
+sed -i "s/%{GIT_HASH}/$GIT_HASH/g" "$GUI_SPEC"
+sed -i "s/%{RELEASE_DATE}/$RELEASE_DATE/g" "$GUI_SPEC"
+
+log_info "GUI spec file generated: $GUI_SPEC"
+
+# Setup RPM build environment
+log_info "Setting up RPM build environment..."
+mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+# Build akmod RPM package
+log_info "Building akmod RPM package..."
+if rpmbuild -bb "$AKMOD_SPEC" \
+    --define "_topdir $HOME/rpmbuild" \
+    --define "kernel_version $KERNEL_VERSION" \
+    --define "kernel_release $KERNEL_RELEASE" \
+    2>&1 | tee "$OUTPUT_DIR/akmod-rpmbuild.log"; then
+    log_info "Akmod RPM package built successfully"
+    # Find and copy the RPM file
+    AKMOD_RPM=$(find ~/rpmbuild/RPMS -name "akmod-yeetmouse-*.rpm" -type f)
+    if [ -n "$AKMOD_RPM" ]; then
+        cp "$AKMOD_RPM" "$OUTPUT_DIR/"
+        log_info "Akmod RPM copied to output: $(basename "$AKMOD_RPM")"
+    else
+        log_warn "Akmod RPM file not found in rpmbuild directory"
+    fi
+else
+    log_error "Akmod RPM build failed, check akmod-rpmbuild.log for details"
+fi
+
+# Build kmod RPM package
+log_info "Building kmod RPM package..."
+if rpmbuild -bb "$KMOD_SPEC" \
+    --define "_topdir $HOME/rpmbuild" \
+    2>&1 | tee "$OUTPUT_DIR/kmod-rpmbuild.log"; then
+    log_info "Kmod RPM package built successfully"
+    # Find and copy the RPM file
+    KMOD_RPM=$(find ~/rpmbuild/RPMS -name "kmod-yeetmouse-*.rpm" -type f)
+    if [ -n "$KMOD_RPM" ]; then
+        cp "$KMOD_RPM" "$OUTPUT_DIR/"
+        log_info "Kmod RPM copied to output: $(basename "$KMOD_RPM")"
+    else
+        log_warn "Kmod RPM file not found in rpmbuild directory"
+    fi
+else
+    log_error "Kmod RPM build failed, check kmod-rpmbuild.log for details"
+fi
+
+# Build GUI RPM package
+log_info "Building GUI RPM package..."
+if rpmbuild -bb "$GUI_SPEC" \
+    --define "_topdir $HOME/rpmbuild" \
+    2>&1 | tee "$OUTPUT_DIR/gui-rpmbuild.log"; then
+    log_info "GUI RPM package built successfully"
+    # Find and copy the RPM file
+    GUI_RPM=$(find ~/rpmbuild/RPMS -name "yeetmouse-gui-*.rpm" -type f)
+    if [ -n "$GUI_RPM" ]; then
+        cp "$GUI_RPM" "$OUTPUT_DIR/"
+        log_info "GUI RPM copied to output: $(basename "$GUI_RPM")"
+    else
+        log_warn "GUI RPM file not found in rpmbuild directory"
+    fi
+else
+    log_error "GUI RPM build failed, check gui-rpmbuild.log for details"
+fi
+
+# Copy spec files to output directory for persistence
+log_info "Copying spec files to output directory..."
+cp "$AKMOD_SPEC" "$OUTPUT_DIR/"
+cp "$KMOD_SPEC" "$OUTPUT_DIR/"
+cp "$GUI_SPEC" "$OUTPUT_DIR/"
+log_info "Spec files copied to output directory"
+
 # Store build metadata
 log_info "Storing build metadata..."
 cat > "$OUTPUT_DIR/build-metadata.txt" <<EOF
@@ -288,6 +415,11 @@ Build Directory: $SOURCE_DIR
 Spec Files Generated:
   - akmod-yeetmouse.spec (automatic kernel module)
   - kmod-yeetmouse.spec (kernel-specific module)
+  - yeetmouse-gui.spec (GUI application)
+RPM Packages Built:
+  - akmod-yeetmouse-${YEETMOUSE_VERSION}-${RELEASE_NUMBER}.rpm
+  - kmod-yeetmouse-${YEETMOUSE_VERSION}-${RELEASE_NUMBER}.rpm
+  - yeetmouse-gui-${YEETMOUSE_VERSION}-${RELEASE_NUMBER}.rpm
 EOF
 
 log_info "Build metadata stored"

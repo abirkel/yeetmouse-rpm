@@ -81,6 +81,11 @@ log_info "YeetMouse version: $YEETMOUSE_VERSION"
 GIT_HASH=$(cd "$SOURCE_DIR" && git rev-parse --short HEAD)
 log_info "Git commit: $GIT_HASH"
 
+# Build release string with git hash and date: 1.git<hash>.<date>
+RELEASE_DATE=$(date +%Y%m%d)
+RELEASE_NUMBER="1.git${GIT_HASH}.${RELEASE_DATE}"
+log_info "Release number: $RELEASE_NUMBER"
+
 # Create source tarball for rpmbuild
 log_info "Creating source tarball..."
 cd "$BUILD_DIR"
@@ -123,6 +128,7 @@ log_info "Spec files copied to output directory for reference"
 log_info "Building akmod RPM package..."
 if ! rpmbuild -bb ~/rpmbuild/SPECS/akmod-yeetmouse.spec \
     --define "_topdir $HOME/rpmbuild" \
+    --define "release_number ${RELEASE_NUMBER}" \
     2>&1 | tee "$OUTPUT_DIR/akmod-rpmbuild.log"; then
     log_error "Akmod RPM build failed, check akmod-rpmbuild.log for details"
     exit 1
@@ -143,6 +149,7 @@ fi
 log_info "Building kmod RPM package..."
 if ! rpmbuild -bb ~/rpmbuild/SPECS/kmod-yeetmouse.spec \
     --define "_topdir $HOME/rpmbuild" \
+    --define "release_number ${RELEASE_NUMBER}" \
     2>&1 | tee "$OUTPUT_DIR/kmod-rpmbuild.log"; then
     log_error "Kmod RPM build failed, check kmod-rpmbuild.log for details"
     exit 1
@@ -163,6 +170,7 @@ fi
 log_info "Building GUI RPM package..."
 if ! rpmbuild -bb ~/rpmbuild/SPECS/yeetmouse-gui.spec \
     --define "_topdir $HOME/rpmbuild" \
+    --define "release_number ${RELEASE_NUMBER}" \
     2>&1 | tee "$OUTPUT_DIR/gui-rpmbuild.log"; then
     log_error "GUI RPM build failed, check gui-rpmbuild.log for details"
     exit 1

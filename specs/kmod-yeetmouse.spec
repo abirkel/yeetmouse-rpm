@@ -2,7 +2,7 @@
 
 Name:           kmod-yeetmouse
 Version:        0.9.2
-Release:        1%{?dist}
+Release:        %{?release_number}%{!?release_number:1}%{?dist}
 Summary:        Kernel module for YeetMouse mouse acceleration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse

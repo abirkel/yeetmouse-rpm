@@ -6,6 +6,7 @@
 set -euo pipefail
 
 # Default configuration
+BASE_IMAGE="fedora"
 FEDORA_VERSION="latest"
 OUTPUT_DIR="./build-output"
 SKIP_KMOD=false
@@ -46,6 +47,7 @@ YeetMouse RPM Builder
 Usage: ./build.sh [OPTIONS]
 
 Options:
+  --base-image IMAGE          Base container image to use (default: fedora)
   --fedora-version VERSION    Fedora version to use for build (default: latest)
   --output-dir PATH           Output directory for RPM files (default: ./build-output)
   --skip-kmod                 Skip building kmod package
@@ -56,6 +58,7 @@ Options:
 Examples:
   ./build.sh
   ./build.sh --fedora-version 41 --output-dir /tmp/rpms
+  ./build.sh --base-image bazzite-nvidia-open --fedora-version latest
   ./build.sh --skip-kmod --keep-container
 
 EOF
@@ -110,11 +113,16 @@ validate_output_dir() {
 build_container_image() {
     log_progress "Building container image..."
     
-    local image_tag="${CONTAINER_NAME}:fedora${FEDORA_VERSION}"
+    # Sanitize base image name for tag (replace special chars with dashes)
+    local sanitized_base_image
+    sanitized_base_image=$(echo "${BASE_IMAGE}" | tr '/:' '-')
+    local image_tag="${CONTAINER_NAME}:${sanitized_base_image}-${FEDORA_VERSION}"
     
+    log_info "Base image: ${BASE_IMAGE}:${FEDORA_VERSION}"
     log_info "Container image tag: ${image_tag}"
     
     if ! ${CONTAINER_RUNTIME} build \
+        --build-arg BASE_IMAGE="${BASE_IMAGE}" \
         --build-arg FEDORA_VERSION="${FEDORA_VERSION}" \
         -t "${image_tag}" \
         -f container/Dockerfile \
@@ -265,6 +273,10 @@ report_results() {
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --base-image)
+                BASE_IMAGE="$2"
+                shift 2
+                ;;
             --fedora-version)
                 FEDORA_VERSION="$2"
                 shift 2
@@ -307,7 +319,8 @@ main() {
     # Parse arguments
     parse_arguments "$@"
     
-    log_info "Fedora version: ${FEDORA_VERSION}"
+    log_info "Base image: ${BASE_IMAGE}"
+    log_info "Version: ${FEDORA_VERSION}"
     log_info "Output directory: ${OUTPUT_DIR}"
     log_info ""
     

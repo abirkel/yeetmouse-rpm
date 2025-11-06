@@ -1,4 +1,6 @@
-FROM fedora:latest
+ARG BASE_IMAGE=fedora
+ARG FEDORA_VERSION=latest
+FROM ${BASE_IMAGE}:${FEDORA_VERSION}
 
 # Install build dependencies
 RUN dnf install -y \
@@ -7,10 +9,11 @@ RUN dnf install -y \
     g++ \
     make \
     rpm-build \
-    libglfw3-devel \
+    glfw-devel \
     mesa-libGL-devel \
     git \
     wget \
+    akmods \
     && dnf clean all
 
 # Set working directory

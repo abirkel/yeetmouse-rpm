@@ -222,20 +222,20 @@ report_results() {
     log_info "Generated files:"
     
     # Count and list RPM files
-    if compgen -G "${OUTPUT_DIR}/*.rpm" > /dev/null; then
-        for rpm in "${OUTPUT_DIR}"/*.rpm; do
+    for rpm in "${OUTPUT_DIR}"/*.rpm; do
+        if [[ -f "${rpm}" ]]; then
             log_info "  [RPM] $(basename "${rpm}")"
             ((rpm_count++))
-        done
-    fi
+        fi
+    done
     
     # Count and list spec files
-    if compgen -G "${OUTPUT_DIR}/*.spec" > /dev/null; then
-        for spec in "${OUTPUT_DIR}"/*.spec; do
+    for spec in "${OUTPUT_DIR}"/*.spec; do
+        if [[ -f "${spec}" ]]; then
             log_info "  [SPEC] $(basename "${spec}")"
             ((spec_count++))
-        done
-    fi
+        fi
+    done
     
     # List metadata file if present
     if [[ -f "${OUTPUT_DIR}/build-metadata.txt" ]]; then

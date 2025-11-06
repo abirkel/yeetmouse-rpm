@@ -81,9 +81,8 @@ log_info "YeetMouse version: $YEETMOUSE_VERSION"
 GIT_HASH=$(cd "$SOURCE_DIR" && git rev-parse --short HEAD)
 log_info "Git commit: $GIT_HASH"
 
-# Build release string with git hash and date: 1.git<hash>.<date>
-RELEASE_DATE=$(date +%Y%m%d)
-RELEASE_NUMBER="1.git${GIT_HASH}.${RELEASE_DATE}"
+# Build release string with git hash: 1.git<hash>
+RELEASE_NUMBER="1.git${GIT_HASH}"
 log_info "Release number: $RELEASE_NUMBER"
 
 # Create source tarball for rpmbuild

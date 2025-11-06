@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Default configuration
-FEDORA_VERSION="40"
+FEDORA_VERSION="latest"
 OUTPUT_DIR="./build-output"
 SKIP_KMOD=false
 SKIP_AKMOD=false
@@ -46,7 +46,7 @@ YeetMouse RPM Builder
 Usage: ./build.sh [OPTIONS]
 
 Options:
-  --fedora-version VERSION    Fedora version to use for build (default: 40)
+  --fedora-version VERSION    Fedora version to use for build (default: latest)
   --output-dir PATH           Output directory for RPM files (default: ./build-output)
   --skip-kmod                 Skip building kmod package
   --skip-akmod                Skip building akmod package

@@ -9,7 +9,7 @@ set -euo pipefail
 # - Compiling GUI application
 
 # Configuration
-YEETMOUSE_REPO="https://github.com/l1mey112/yeetmouse.git"
+YEETMOUSE_REPO="https://github.com/AndyFilter/YeetMouse.git"
 BUILD_DIR="/build"
 OUTPUT_DIR="/output"
 SOURCE_DIR="${BUILD_DIR}/yeetmouse-source"
@@ -211,6 +211,69 @@ sed -i "s/%{RELEASE_DATE}/$RELEASE_DATE/g" "$AKMOD_SPEC"
 
 log_info "Akmod spec file generated: $AKMOD_SPEC"
 
+# Generate kmod spec file
+log_info "Generating kmod spec file..."
+
+# Create kmod spec file
+KMOD_SPEC="$OUTPUT_DIR/kmod-yeetmouse.spec"
+cat > "$KMOD_SPEC" <<'SPEC_EOF'
+Name:           kmod-yeetmouse
+Version:        %{YEETMOUSE_VERSION}
+Release:        %{RELEASE_NUMBER}%{?dist}
+Summary:        Kernel module for YeetMouse mouse acceleration
+License:        GPL-2.0-or-later
+
+URL:            https://github.com/l1mey112/yeetmouse
+Source0:        https://github.com/l1mey112/yeetmouse/archive/refs/tags/v%{version}.tar.gz
+
+BuildRequires:  kernel-devel = %{KERNEL_VERSION}
+BuildRequires:  gcc
+BuildRequires:  make
+
+Requires:       kernel = %{KERNEL_VERSION}
+
+%description
+YeetMouse is a kernel module that provides customizable mouse acceleration.
+This package provides the kmod version built for a specific kernel version.
+The module must be rebuilt when the kernel is updated.
+
+%prep
+%setup -q -n yeetmouse-%{version}
+
+%build
+cd driver
+make -C /lib/modules/%{KERNEL_VERSION}/build M=$(pwd) modules
+
+%install
+mkdir -p %{buildroot}/lib/modules/%{KERNEL_VERSION}/extra/yeetmouse
+install -m 644 driver/yeetmouse.ko %{buildroot}/lib/modules/%{KERNEL_VERSION}/extra/yeetmouse/
+
+%post
+/usr/sbin/depmod -a %{KERNEL_VERSION}
+/sbin/modprobe yeetmouse || true
+
+%preun
+/sbin/modprobe -r yeetmouse || true
+
+%files
+/lib/modules/%{KERNEL_VERSION}/extra/yeetmouse/yeetmouse.ko
+
+%changelog
+* %{RELEASE_DATE} YeetMouse Builder <builder@yeetmouse.local> - %{version}-%{RELEASE_NUMBER}
+- Automated build from YeetMouse repository (git commit %{GIT_HASH})
+- Built for kernel %{KERNEL_VERSION}
+
+SPEC_EOF
+
+# Replace template variables in spec file
+sed -i "s/%{YEETMOUSE_VERSION}/$YEETMOUSE_VERSION/g" "$KMOD_SPEC"
+sed -i "s/%{RELEASE_NUMBER}/$RELEASE_NUMBER/g" "$KMOD_SPEC"
+sed -i "s/%{GIT_HASH}/$GIT_HASH/g" "$KMOD_SPEC"
+sed -i "s/%{RELEASE_DATE}/$RELEASE_DATE/g" "$KMOD_SPEC"
+sed -i "s/%{KERNEL_VERSION}/$KERNEL_VERSION/g" "$KMOD_SPEC"
+
+log_info "Kmod spec file generated: $KMOD_SPEC"
+
 # Store build metadata
 log_info "Storing build metadata..."
 cat > "$OUTPUT_DIR/build-metadata.txt" <<EOF
@@ -222,6 +285,9 @@ YeetMouse Git Hash: $GIT_HASH
 YeetMouse Release: $RELEASE_NUMBER
 YeetMouse Source: $YEETMOUSE_REPO
 Build Directory: $SOURCE_DIR
+Spec Files Generated:
+  - akmod-yeetmouse.spec (automatic kernel module)
+  - kmod-yeetmouse.spec (kernel-specific module)
 EOF
 
 log_info "Build metadata stored"

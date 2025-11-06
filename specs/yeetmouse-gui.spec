@@ -1,3 +1,5 @@
+%global debug_package %{nil}
+
 Name:           yeetmouse-gui
 Version:        0.9.2
 Release:        1%{?dist}

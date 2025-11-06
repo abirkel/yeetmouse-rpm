@@ -1,0 +1,45 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.rpm
+*.tar.gz
+build/
+dist/
+*.egg-info/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.kiro
+yeetmouse-ref/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+
+# Node/npm
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Docker
+.docker/
+
+# Temporary files
+*.tmp
+*.log
+.env.local
+
+# OS specific
+Thumbs.db
+.AppleDouble
+.LSOverride

@@ -13,7 +13,6 @@ SKIP_AKMOD=false
 KEEP_CONTAINER=false
 CONTAINER_RUNTIME=""
 CONTAINER_NAME="yeetmouse-rpm-builder"
-BUILD_LOG="${OUTPUT_DIR}/build.log"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -24,19 +23,19 @@ NC='\033[0m' # No Color
 
 # Function to print colored messages
 log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1" | tee -a "${BUILD_LOG}"
+    echo -e "${GREEN}[INFO]${NC} $1" >&2
 }
 
 log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "${BUILD_LOG}"
+    echo -e "${YELLOW}[WARN]${NC} $1" >&2
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" | tee -a "${BUILD_LOG}"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
 log_progress() {
-    echo -e "${BLUE}[PROGRESS]${NC} $1" | tee -a "${BUILD_LOG}"
+    echo -e "${BLUE}[PROGRESS]${NC} $1" >&2
 }
 
 # Function to display help message
@@ -102,8 +101,7 @@ validate_output_dir() {
     fi
     
     # Convert to absolute path
-    OUTPUT_DIR=$(cd "${OUTPUT_DIR}" && pwd)
-    BUILD_LOG="${OUTPUT_DIR}/build.log"
+    OUTPUT_DIR=$(realpath "${OUTPUT_DIR}")
     
     log_info "Output directory validated: ${OUTPUT_DIR}"
 }
@@ -113,20 +111,15 @@ build_container_image() {
     log_progress "Building container image..."
     
     local image_tag="${CONTAINER_NAME}:fedora${FEDORA_VERSION}"
-    local image_build_log="${OUTPUT_DIR}/image-build.log"
     
     log_info "Container image tag: ${image_tag}"
-    log_info "Image build output will be logged to: ${image_build_log}"
     
-    ${CONTAINER_RUNTIME} build \
+    if ! ${CONTAINER_RUNTIME} build \
         --build-arg FEDORA_VERSION="${FEDORA_VERSION}" \
         -t "${image_tag}" \
         -f container/Dockerfile \
-        container/ 2>&1 | tee -a "${BUILD_LOG}" "${image_build_log}"
-    
-    if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+        container/; then
         log_error "Container image build failed"
-        log_error "See ${image_build_log} for details"
         exit 3
     fi
     
@@ -138,7 +131,6 @@ build_container_image() {
 run_container_build() {
     local image_tag=$1
     local container_id
-    local container_log="${OUTPUT_DIR}/container-build.log"
     
     log_progress "Starting container build process..."
     log_info "Build options: SKIP_KMOD=${SKIP_KMOD}, SKIP_AKMOD=${SKIP_AKMOD}"
@@ -152,36 +144,45 @@ run_container_build() {
         env_args+=(-e SKIP_AKMOD=1)
     fi
     
+    # Get absolute path to specs directory
+    local specs_dir
+    specs_dir=$(realpath "./specs")
+    
+    if [[ ! -d "${specs_dir}" ]]; then
+        log_error "Specs directory not found: ${specs_dir}"
+        exit 2
+    fi
+    
     # Generate unique container ID
     container_id="${CONTAINER_NAME}-$(date +%s)"
     
     log_info "Container ID: ${container_id}"
-    log_info "Container output will be logged to: ${container_log}"
+    log_info "Output directory: ${OUTPUT_DIR}"
+    log_info "Specs directory: ${specs_dir}"
     log_info "=========================================="
     log_progress "Container build output:"
     log_info "=========================================="
     
-    # Run container with volume mount
+    # Run container with volume mounts for output and specs
     ${CONTAINER_RUNTIME} run \
         --name "${container_id}" \
-        -v "${OUTPUT_DIR}:/output:Z" \
+        -v "${OUTPUT_DIR}:/output" \
+        -v "${specs_dir}:/specs:ro" \
         "${env_args[@]}" \
-        "${image_tag}" 2>&1 | tee -a "${BUILD_LOG}" "${container_log}"
+        "${image_tag}"
     
-    local exit_code=${PIPESTATUS[0]}
+    local exit_code=$?
     
     log_info "=========================================="
     
     if [[ ${exit_code} -ne 0 ]]; then
         log_error "Container build process failed with exit code ${exit_code}"
-        log_error "Container output saved to: ${container_log}"
-        log_error "Review the container log for detailed error information"
+        log_error "Check build logs in ${OUTPUT_DIR} for details"
         cleanup_container "${container_id}"
         exit 4
     fi
     
     log_info "Container build completed successfully"
-    log_info "Container output saved to: ${container_log}"
     
     # Cleanup container unless --keep-container is specified
     if [[ "${KEEP_CONTAINER}" == "false" ]]; then
@@ -189,6 +190,8 @@ run_container_build() {
     else
         log_info "Container kept as requested: ${container_id}"
     fi
+    
+    return 0
 }
 
 # Function to cleanup container
@@ -210,13 +213,11 @@ report_results() {
     log_info ""
     log_info "Build Summary:"
     log_info "  Output directory: ${OUTPUT_DIR}"
-    log_info "  Build log: ${BUILD_LOG}"
     log_info ""
     
     # List all generated files
     local rpm_count=0
     local spec_count=0
-    local log_count=0
     
     log_info "Generated files:"
     
@@ -236,14 +237,6 @@ report_results() {
         done
     fi
     
-    # Count and list log files
-    if compgen -G "${OUTPUT_DIR}/*.log" > /dev/null; then
-        for log_file in "${OUTPUT_DIR}"/*.log; do
-            log_info "  [LOG] $(basename "${log_file}")"
-            ((log_count++))
-        done
-    fi
-    
     # List metadata file if present
     if [[ -f "${OUTPUT_DIR}/build-metadata.txt" ]]; then
         log_info "  [METADATA] build-metadata.txt"
@@ -253,7 +246,6 @@ report_results() {
     log_info "Summary:"
     log_info "  RPM packages: ${rpm_count}"
     log_info "  Spec files: ${spec_count}"
-    log_info "  Log files: ${log_count}"
     log_info ""
     
     # Display build metadata if available
@@ -311,14 +303,6 @@ main() {
     # Parse arguments
     parse_arguments "$@"
     
-    # Initialize build log
-    mkdir -p "$(dirname "${BUILD_LOG}")" 2>/dev/null || true
-    {
-        echo "=========================================="
-        echo "Build started at $(date)"
-        echo "=========================================="
-    } > "${BUILD_LOG}"
-    
     log_info "Fedora version: ${FEDORA_VERSION}"
     log_info "Output directory: ${OUTPUT_DIR}"
     log_info ""
@@ -330,9 +314,14 @@ main() {
     # Build and run
     local image_tag
     image_tag=$(build_container_image)
-    run_container_build "${image_tag}"
     
-    # Report results
+    # Run container build and check if it succeeded
+    if ! run_container_build "${image_tag}"; then
+        log_error "Build failed!"
+        exit 1
+    fi
+    
+    # Report results only if build succeeded
     report_results
     
     log_progress "Build process complete!"

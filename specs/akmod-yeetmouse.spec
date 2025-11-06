@@ -1,3 +1,5 @@
+%global debug_package %{nil}
+
 Name:           akmod-yeetmouse
 Version:        0.9.2
 Release:        1%{?dist}
@@ -13,6 +15,9 @@ BuildRequires:  akmods
 
 Requires:       akmods
 Requires:       kernel-devel
+
+# Disable debug package generation for kernel modules
+%global debug_package %{nil}
 
 %description
 YeetMouse is a kernel module that provides customizable mouse acceleration.

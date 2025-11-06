@@ -1,3 +1,5 @@
+%global debug_package %{nil}
+
 Name:           kmod-yeetmouse
 Version:        0.9.2
 Release:        1%{?dist}
@@ -11,6 +13,9 @@ BuildRequires:  gcc
 BuildRequires:  make
 
 Requires:       kernel
+
+# Disable debug package generation for kernel modules
+%global debug_package %{nil}
 
 %description
 YeetMouse is a kernel module that provides customizable mouse acceleration.

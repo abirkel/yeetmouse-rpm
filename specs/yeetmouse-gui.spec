@@ -15,6 +15,7 @@ BuildRequires:  make
 BuildRequires:  glfw-devel
 BuildRequires:  mesa-libGL-devel
 
+Requires:       (akmod-yeetmouse or kmod-yeetmouse)
 Requires:       glfw
 Requires:       mesa-libGL
 
@@ -61,6 +62,7 @@ install -m 755 gui/YeetMouseGui %{buildroot}%{_bindir}/yeetmouse-gui
 - Update to git snapshot 99844bb
 - Fix spec to use proper git snapshot source URL
 - Add commented-out desktop file integration (optional)
+- Add kernel module dependency (akmod or kmod)
 
 * Thu Nov 06 2025 YeetMouse Builder <builder@yeetmouse.local> - 0.9.2-1
 - Initial GUI package for YeetMouse

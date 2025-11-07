@@ -1,23 +1,19 @@
 %global debug_package %{nil}
+%global commit 99844bbd786d612657d892cac2f663d940fd3d62
+%global shortcommit 99844bb
 
 Name:           akmod-yeetmouse
 Version:        0.9.2
-Release:        %{?release_number}%{!?release_number:1}%{?dist}
+Release:        %{?release_number}%{!?release_number:1}.git%{shortcommit}%{?dist}
 Summary:        Automatic kernel module for YeetMouse mouse acceleration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
-Source0:        yeetmouse-%{version}.tar.gz
+Source0:        %{url}/archive/%{commit}/YeetMouse-%{commit}.tar.gz
 
-BuildRequires:  kernel-devel
-BuildRequires:  gcc
-BuildRequires:  make
 BuildRequires:  akmods
 
 Requires:       akmods
 Requires:       kernel-devel
-
-# Disable debug package generation for kernel modules
-%global debug_package %{nil}
 
 %description
 YeetMouse is a kernel module that provides customizable mouse acceleration.
@@ -25,26 +21,16 @@ This package provides the akmod (automatic kernel module) version that
 automatically rebuilds the module when the kernel is updated.
 
 %prep
-%setup -q -n yeetmouse
+%setup -q -n YeetMouse-%{commit}
 
 %build
-# Copy sample config if config.h doesn't exist
+# Prepare source files only - akmods will compile on target system
 if [ ! -f driver/config.h ]; then
     cp driver/config.sample.h driver/config.h
 fi
 
-# Find installed kernel-devel version
-KVER=$(rpm -q kernel-devel --qf '%%{VERSION}-%%{RELEASE}.%%{ARCH}\n' | head -1)
-
-# Build kernel module
-cd driver
-make -C /usr/src/kernels/${KVER} M=$(pwd) modules
-
 %install
-# Get kernel version from installed kernel-devel
-KVER=$(rpm -q kernel-devel --qf '%%{VERSION}-%%{RELEASE}.%%{ARCH}\n' | head -1)
-
-# Install kernel module
+# Install source files to akmods directory
 mkdir -p %{buildroot}/usr/src/akmods/yeetmouse-%{version}/driver
 mkdir -p %{buildroot}/usr/src/akmods/yeetmouse-%{version}/driver/FixedMath
 
@@ -55,15 +41,6 @@ cp -r driver/FixedMath/*.h %{buildroot}/usr/src/akmods/yeetmouse-%{version}/driv
 cp driver/Makefile %{buildroot}/usr/src/akmods/yeetmouse-%{version}/driver/
 cp shared_definitions.h %{buildroot}/usr/src/akmods/yeetmouse-%{version}/
 cp Makefile %{buildroot}/usr/src/akmods/yeetmouse-%{version}/
-
-# Create akmod configuration
-mkdir -p %{buildroot}/etc/akmods
-cat > %{buildroot}/etc/akmods/yeetmouse.conf <<EOF
-# YeetMouse akmod configuration
-MODULE_NAME=yeetmouse
-MODULE_VERSION=%{version}
-MODULE_SOURCE=/usr/src/akmods/yeetmouse-%{version}
-EOF
 
 %post
 # Trigger akmod build for current kernel
@@ -77,8 +54,11 @@ EOF
 
 %files
 /usr/src/akmods/yeetmouse-%{version}
-/etc/akmods/yeetmouse.conf
 
 %changelog
+* Fri Nov 07 2025 YeetMouse Builder <builder@yeetmouse.local> - 0.9.2-1.git99844bb
+- Update to git snapshot 99844bb
+- Fix spec to use proper git snapshot source URL
+
 * Thu Nov 06 2025 YeetMouse Builder <builder@yeetmouse.local> - 0.9.2-1
 - Initial akmod package for YeetMouse

@@ -1,12 +1,14 @@
 %global debug_package %{nil}
+%global commit 99844bbd786d612657d892cac2f663d940fd3d62
+%global shortcommit 99844bb
 
 Name:           kmod-yeetmouse
 Version:        0.9.2
-Release:        %{?release_number}%{!?release_number:1}%{?dist}
+Release:        %{?release_number}%{!?release_number:1}.git%{shortcommit}%{?dist}
 Summary:        Kernel module for YeetMouse mouse acceleration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
-Source0:        yeetmouse-%{version}.tar.gz
+Source0:        %{url}/archive/%{commit}/YeetMouse-%{commit}.tar.gz
 
 BuildRequires:  kernel-devel
 BuildRequires:  gcc
@@ -14,16 +16,13 @@ BuildRequires:  make
 
 Requires:       kernel
 
-# Disable debug package generation for kernel modules
-%global debug_package %{nil}
-
 %description
 YeetMouse is a kernel module that provides customizable mouse acceleration.
 This package provides the kmod version built for a specific kernel version.
 The module must be rebuilt when the kernel is updated.
 
 %prep
-%setup -q -n yeetmouse
+%setup -q -n YeetMouse-%{commit}
 
 %build
 # Copy sample config if config.h doesn't exist
@@ -31,25 +30,24 @@ if [ ! -f driver/config.h ]; then
     cp driver/config.sample.h driver/config.h
 fi
 
-# Find installed kernel-devel version
-KVER=$(rpm -q kernel-devel --qf '%%{VERSION}-%%{RELEASE}.%%{ARCH}\n' | head -1)
+# Build kernel module for current kernel-devel
+KVER=$(ls -1 /usr/src/kernels | head -1)
 
 # Build kernel module
 cd driver
 make -C /usr/src/kernels/${KVER} M=$(pwd) modules
 
 %install
-# Find installed kernel-devel version
-KVER=$(rpm -q kernel-devel --qf '%%{VERSION}-%%{RELEASE}.%%{ARCH}\n' | head -1)
+# Get kernel version from build
+KVER=$(ls -1 /usr/src/kernels | head -1)
 
 # Install kernel module
 mkdir -p %{buildroot}/lib/modules/${KVER}/extra/yeetmouse
 install -m 644 driver/yeetmouse.ko %{buildroot}/lib/modules/${KVER}/extra/yeetmouse/
 
 %post
-# Update module dependencies
-KVER=$(rpm -q kernel-devel --qf '%%{VERSION}-%%{RELEASE}.%%{ARCH}\n' | head -1)
-/usr/sbin/depmod -a ${KVER} || true
+# Update module dependencies for running kernel
+/usr/sbin/depmod -a || true
 /sbin/modprobe yeetmouse || true
 
 %preun
@@ -60,5 +58,11 @@ KVER=$(rpm -q kernel-devel --qf '%%{VERSION}-%%{RELEASE}.%%{ARCH}\n' | head -1)
 /lib/modules/*/extra/yeetmouse/yeetmouse.ko
 
 %changelog
+* Fri Nov 07 2025 YeetMouse Builder <builder@yeetmouse.local> - 0.9.2-1.git99844bb
+- Update to git snapshot 99844bb
+- Fix spec to use proper git snapshot source URL
+- Fix KVER detection to use installed kernels directory
+- Simplify post-install script to use system's running kernel
+
 * Thu Nov 06 2025 YeetMouse Builder <builder@yeetmouse.local> - 0.9.2-1
 - Initial kmod package for YeetMouse

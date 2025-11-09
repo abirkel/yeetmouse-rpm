@@ -1,0 +1,532 @@
+---
+name: Build and Publish RPM Packages
+
+'on':
+  workflow_dispatch:
+    inputs:
+      yeetmouse_commit:
+        description: 'YeetMouse commit hash to build (full 40-char hash)'
+        required: false
+        type: string
+        default: ''
+      update_specs:
+        description: 'Update spec files with new version and release'
+        required: false
+        type: boolean
+        default: false
+      force_rebuild:
+        description: 'Force rebuild even if version unchanged'
+        required: false
+        type: boolean
+        default: false
+      build_akmod:
+        description: 'Build akmod package'
+        required: false
+        type: boolean
+        default: true
+      build_cli:
+        description: 'Build CLI package'
+        required: false
+        type: boolean
+        default: true
+      build_kmod:
+        description: 'Build kmod package'
+        required: false
+        type: boolean
+        default: false
+      container_image:
+        description: |
+          Container image to use (leave empty to use build.conf default)
+          (e.g., fedora, ghcr.io/ublue-os/aurora-nvidia-open)
+        required: false
+        type: string
+        default: ''
+      fedora_version:
+        description: 'Fedora version to use (leave empty to use build.conf default)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  load-config:
+    runs-on: ubuntu-latest
+    outputs:
+      container_image: ${{ steps.config.outputs.container_image }}
+      container_version: ${{ steps.config.outputs.container_version }}
+      enable_kmod: ${{ steps.config.outputs.enable_kmod }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load configuration
+        id: config
+        run: |
+          source build.conf
+
+          # Use workflow inputs if provided, otherwise use config defaults
+          INPUT_IMAGE="${{ github.event.inputs.container_image }}"
+          INPUT_VERSION="${{ github.event.inputs.fedora_version }}"
+
+          FINAL_IMAGE="${INPUT_IMAGE:-$CONTAINER_IMAGE}"
+          FINAL_VERSION="${INPUT_VERSION:-$CONTAINER_VERSION}"
+
+          echo "container_image=$FINAL_IMAGE" >> $GITHUB_OUTPUT
+          echo "container_version=$FINAL_VERSION" >> $GITHUB_OUTPUT
+          echo "enable_kmod=$ENABLE_KMOD" >> $GITHUB_OUTPUT
+
+  update-specs:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.update_specs == 'true'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+      short_commit: ${{ steps.version.outputs.short_commit }}
+      commit_sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Determine yeetmouse commit
+        id: version
+        run: |
+          # Use workflow input if provided, otherwise read from file
+          INPUT_COMMIT="${{ github.event.inputs.yeetmouse_commit }}"
+          if [ -n "$INPUT_COMMIT" ]; then
+            COMMIT="$INPUT_COMMIT"
+            echo "Using commit from workflow input: $COMMIT"
+          elif [ -f .external_versions ]; then
+            source .external_versions
+            COMMIT="$YEETMOUSE_COMMIT"
+            echo "Using commit from .external_versions: $COMMIT"
+          else
+            echo "ERROR: No commit specified and .external_versions not found"
+            echo "Please provide yeetmouse_commit input or ensure .external_versions exists"
+            exit 1
+          fi
+          
+          # Calculate short commit (first 7 chars)
+          SHORT_COMMIT=$(echo "$COMMIT" | cut -c1-7)
+          
+          echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+          echo "short_commit=$SHORT_COMMIT" >> $GITHUB_OUTPUT
+
+      - name: Extract DKMS_VER from commit
+        id: extract_version
+        run: |
+          COMMIT="${{ steps.version.outputs.commit }}"
+          
+          # Download Makefile from the commit
+          curl -sL "https://raw.githubusercontent.com/AndyFilter/YeetMouse/${COMMIT}/Makefile" -o Makefile.tmp
+          
+          # Extract DKMS_VER
+          DKMS_VER=$(grep "^DKMS_VER" Makefile.tmp | cut -d'=' -f2 | xargs)
+          rm Makefile.tmp
+          
+          if [ -z "$DKMS_VER" ]; then
+            echo "ERROR: Failed to extract DKMS_VER from Makefile"
+            exit 1
+          fi
+          
+          echo "version=$DKMS_VER" >> $GITHUB_OUTPUT
+          echo "Extracted DKMS_VER: $DKMS_VER"
+
+      - name: Update spec files with new version and release
+        run: |
+          set -euo pipefail
+          COMMIT="${{ steps.version.outputs.commit }}"
+          SHORT_COMMIT="${{ steps.version.outputs.short_commit }}"
+          VERSION_NUM="${{ steps.extract_version.outputs.version }}"
+          CHANGELOG_DATE=$(LC_ALL=C date "+%a %b %d %Y")
+          MAINTAINER="github-actions[bot] \
+            <github-actions[bot]@users.noreply.github.com>"
+
+          for spec in specs/*.spec; do
+            if [ ! -f "$spec" ]; then
+              echo "ERROR: Spec file not found: $spec"
+              exit 1
+            fi
+            if ! grep -q "^Version:" "$spec"; then
+              echo "ERROR: Version field not found in $spec"
+              exit 1
+            fi
+            if ! grep -q "^Release:" "$spec"; then
+              echo "ERROR: Release field not found in $spec"
+              exit 1
+            fi
+            if ! grep -q "^%global commit" "$spec"; then
+              echo "ERROR: %global commit not found in $spec"
+              exit 1
+            fi
+
+            # Extract current values from spec file
+            CURRENT_VERSION=$(grep "^Version:" "$spec" | awk '{print $NF}')
+            CURRENT_RELEASE=$(grep "^Release:" "$spec" | \
+              awk '{print $NF}' | sed 's/\.git.*//; s/%{?dist}//')
+            CURRENT_COMMIT=$(grep "^%global commit" "$spec" | awk '{print $NF}')
+
+            # Determine new release number and changelog message
+            if [ "$CURRENT_VERSION" != "$VERSION_NUM" ]; then
+              # Version changed (DKMS_VER updated), reset release to 1
+              NEW_RELEASE=1
+              CHANGELOG_MSG="- Update to version ${VERSION_NUM} (git commit ${SHORT_COMMIT})"
+            elif [ "$CURRENT_COMMIT" != "$COMMIT" ]; then
+              # Same version, new commit, reset release to 1
+              NEW_RELEASE=1
+              CHANGELOG_MSG="- Update to git commit ${SHORT_COMMIT}"
+            else
+              # Same version and commit, increment release (rebuild)
+              NEW_RELEASE=$((CURRENT_RELEASE + 1))
+              CHANGELOG_MSG="- Rebuild for kernel compatibility"
+            fi
+
+            # Update %global commit and %global shortcommit
+            sed -i "s/^%global commit.*/%global commit ${COMMIT}/" "$spec"
+            sed -i "s/^%global shortcommit.*/%global shortcommit ${SHORT_COMMIT}/" "$spec"
+
+            # Update Version field
+            sed -i "s/^Version:.*/Version:        ${VERSION_NUM}/" "$spec"
+
+            # Update Release field with git commit hash
+            sed -i "s/^Release:.*/Release:        ${NEW_RELEASE}.git%{shortcommit}%{?dist}/" \
+              "$spec"
+
+            # Insert changelog entry after %changelog line
+            ENTRY="* ${CHANGELOG_DATE} ${MAINTAINER} - "
+            ENTRY="${ENTRY}${VERSION_NUM}-${NEW_RELEASE}.git${SHORT_COMMIT}"
+            ENTRY="${ENTRY}\\n${CHANGELOG_MSG}"
+            sed -i "/^%changelog$/a\\${ENTRY}" "$spec"
+          done
+
+      - name: Commit updated spec files
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add specs/*.spec
+          VERSION="${{ steps.extract_version.outputs.version }}"
+          SHORT_COMMIT="${{ steps.version.outputs.short_commit }}"
+          git commit -m "chore: update spec files to version ${VERSION} (commit ${SHORT_COMMIT})" && git push
+          
+          # Capture the commit SHA
+          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+  build-rpm:
+    needs: [load-config, update-specs]
+    if: always() && needs.load-config.result == 'success'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.load-config.outputs.container_image }}:${{ needs.load-config.outputs.container_version }}
+    outputs:
+      container_image: ${{ needs.load-config.outputs.container_image }}
+      container_version: ${{ needs.load-config.outputs.container_version }}
+      kernel_version: ${{ steps.build_info.outputs.kernel_version }}
+      version: ${{ steps.get_version.outputs.version }}
+      short_commit: ${{ steps.get_version.outputs.short_commit }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.update-specs.outputs.commit_sha || github.ref_name }}
+
+      - name: Get version from spec
+        id: get_version
+        run: |
+          VERSION=$(grep "^Version:" specs/akmod-yeetmouse.spec | awk '{print $NF}')
+          SHORT_COMMIT=$(grep "^%global shortcommit" specs/akmod-yeetmouse.spec | awk '{print $NF}')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "short_commit=${SHORT_COMMIT}" >> $GITHUB_OUTPUT
+          echo "Detected version from spec: ${VERSION}"
+          echo "Detected short commit from spec: ${SHORT_COMMIT}"
+
+      - name: Detect kernel version
+        id: build_info
+        run: |
+          set -euo pipefail
+
+          # Capture kernel version from container (not host)
+          KERNEL_VERSION=$(rpm -q kernel-devel \
+            --queryformat '%{VERSION}-%{RELEASE}\n' | head -1)
+
+          if [ -z "$KERNEL_VERSION" ]; then
+            echo "ERROR: Failed to extract kernel version"
+            exit 1
+          fi
+
+          echo "kernel_version=${KERNEL_VERSION}" >> $GITHUB_OUTPUT
+          echo "Detected kernel version: ${KERNEL_VERSION}"
+
+      - name: Install build dependencies
+        run: |
+          # Step 1: Install base RPM build tools
+          dnf install -y rpm-build rpmdevtools rpmlint createrepo_c \
+            rpm-sign gnupg2 pinentry spectool
+
+          # Step 2: Install BuildRequires from spec files
+          dnf builddep -y specs/*.spec
+
+      - name: Setup RPM build tree
+        run: rpmdev-setuptree
+
+      - name: Download YeetMouse source
+        run: |
+          for spec in specs/*.spec; do
+            spectool -g -R "$spec"
+          done
+
+      - name: Copy spec files
+        run: |
+          cp specs/*.spec ~/rpmbuild/SPECS/
+
+      - name: Build akmod-yeetmouse
+        if: github.event.inputs.build_akmod == 'true'
+        run: |
+          cd ~/rpmbuild/SPECS
+          rpmbuild -ba akmod-yeetmouse.spec
+
+      - name: Build yeetmouse-gui
+        if: github.event.inputs.build_cli == 'true'
+        run: |
+          cd ~/rpmbuild/SPECS
+          rpmbuild -ba yeetmouse-gui.spec
+
+      - name: Build kmod-yeetmouse
+        if: |
+          github.event.inputs.build_kmod == 'true' &&
+          needs.load-config.outputs.enable_kmod == 'true'
+        run: |
+          cd ~/rpmbuild/SPECS
+          rpmbuild -ba kmod-yeetmouse.spec
+
+          # Get kernel version from build info
+          KVER="${{ steps.build_info.outputs.kernel_version }}"
+
+          # Rename kmod package to include kernel version
+          cd ~/rpmbuild/RPMS/x86_64
+          for rpm in kmod-yeetmouse-*.rpm; do
+            if [[ "$rpm" != *"+"* ]]; then
+              # Extract version and release from filename
+              # kmod-yeetmouse-0.9.2-1.fc41.x86_64.rpm ->
+              # kmod-yeetmouse-0.9.2-1+6.12.1.fc41.x86_64.rpm
+              NEW_NAME=$(echo "$rpm" | \
+                sed "s/\.fc[0-9]*\.x86_64\.rpm/+${KVER}.x86_64.rpm/")
+              mv "$rpm" "$NEW_NAME"
+            fi
+          done
+
+      - name: Lint packages
+        run: |
+          rpmlint ~/rpmbuild/RPMS/x86_64/*.rpm || true
+        continue-on-error: true
+
+      - name: Setup GPG for signing
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 -d > private.key
+          gpg --batch --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+            --import private.key
+          echo -e "5\ny\n" | gpg --batch --command-fd 0 \
+            --edit-key "${{ secrets.GPG_KEY_ID }}" trust
+          rm private.key
+
+      - name: Sign RPM packages
+        run: |
+          echo "%_gpg_name ${{ secrets.GPG_KEY_ID }}" > ~/.rpmmacros
+          echo "%__gpg /usr/bin/gpg" >> ~/.rpmmacros
+          echo "%_gpg_sign_cmd_extra_args --batch --no-tty --yes \
+            --pinentry-mode loopback --passphrase \
+            '${{ secrets.GPG_PASSPHRASE }}'" >> ~/.rpmmacros
+          cd ~/rpmbuild/RPMS/x86_64
+          rpm --addsign *.rpm
+
+      - name: Prepare release packages
+        run: |
+          set -euo pipefail
+          mkdir -p release-packages
+
+          # Copy akmod packages if built
+          if [ "${{ github.event.inputs.build_akmod }}" == "true" ]; then
+            if ls ~/rpmbuild/RPMS/x86_64/akmod-yeetmouse-*.rpm \
+                1>/dev/null 2>&1; then
+              cp ~/rpmbuild/RPMS/x86_64/akmod-yeetmouse-*.rpm \
+                release-packages/
+            else
+              echo "ERROR: akmod package build requested but not found"
+              exit 1
+            fi
+          fi
+
+          # Copy GUI packages if built
+          if [ "${{ github.event.inputs.build_cli }}" == "true" ]; then
+            if ls ~/rpmbuild/RPMS/x86_64/yeetmouse-gui-*.rpm 1>/dev/null 2>&1; then
+              cp ~/rpmbuild/RPMS/x86_64/yeetmouse-gui-*.rpm release-packages/
+            else
+              echo "ERROR: GUI package build requested but not found"
+              exit 1
+            fi
+          fi
+
+          # Copy kmod packages if built
+          if [ "${{ github.event.inputs.build_kmod }}" == "true" ]; then
+            if ls ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm \
+                1>/dev/null 2>&1; then
+              cp ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm \
+                release-packages/
+            else
+              echo "ERROR: kmod package build requested but not found"
+              exit 1
+            fi
+          fi
+
+          # Exclude akmod-akmod-yeetmouse and kmod-akmod-yeetmouse (stubs)
+          rm -f release-packages/akmod-akmod-yeetmouse-*.rpm
+          rm -f release-packages/kmod-akmod-yeetmouse-*.rpm
+
+          # Copy source RPMs if any packages were built
+          if ls ~/rpmbuild/SRPMS/*.src.rpm 1>/dev/null 2>&1; then
+            cp ~/rpmbuild/SRPMS/*.src.rpm release-packages/
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-packages
+          path: |
+            release-packages/
+            repo/
+
+  publish:
+    needs: build-rpm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rpm-packages
+          path: artifacts/
+
+      - name: Get container build tag
+        id: container_info
+        run: |
+          CONTAINER_IMAGE="${{ needs.build-rpm.outputs.container_image }}"
+          CONTAINER_VERSION="${{ needs.build-rpm.outputs.container_version }}"
+          IMAGE_FULL="${CONTAINER_IMAGE}:${CONTAINER_VERSION}"
+
+          # Pull image to ensure we have it locally
+          docker pull "${IMAGE_FULL}"
+
+          # Extract build tag from image labels
+          BUILD_TAG=$(docker inspect \
+            --format='{{index .Config.Labels "org.opencontainers.image.version"}}' \
+            "${IMAGE_FULL}")
+
+          if [ -z "$BUILD_TAG" ]; then
+            echo "WARNING: Failed to extract build tag, using container version"
+            BUILD_TAG="${CONTAINER_VERSION}"
+          fi
+
+          echo "build_tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
+          echo "Container build tag: ${BUILD_TAG}"
+
+      - name: Prepare release notes
+        id: release_notes
+        run: |
+          source build.conf
+
+          VER="${{ needs.build-rpm.outputs.version }}"
+          SHORT_COMMIT="${{ needs.build-rpm.outputs.short_commit }}"
+          IMG="${{ needs.build-rpm.outputs.container_image }}"
+          BUILD_TAG="${{ steps.container_info.outputs.build_tag }}"
+          KVER="${{ needs.build-rpm.outputs.kernel_version }}"
+          REPO="${{ github.repository }}"
+
+          {
+            echo "notes<<EOF"
+            echo "RPM packages for YeetMouse **v${VER}** (commit ${SHORT_COMMIT})"
+            echo ""
+            echo "## Build Information"
+            echo "- **Container Image:** \`${IMG}:${BUILD_TAG}\`"
+            echo "- **Kernel Version:** \`$KVER\`"
+            echo "- **YeetMouse Commit:** \`${SHORT_COMMIT}\`"
+
+            if [ "$ENABLE_KMOD" != "true" ]; then
+              echo ""
+              echo "> **Note:** kmod packages disabled (ENABLE_KMOD=false)"
+            fi
+
+            echo ""
+            echo "## Installation"
+            echo "\`\`\`bash"
+            echo "sudo wget \\"
+            echo "  https://raw.githubusercontent.com/$REPO/main/yeetmouse.repo \\"
+            echo "  -O /etc/yum.repos.d/yeetmouse.repo && \\"
+            echo "  sudo dnf install akmod-yeetmouse yeetmouse-gui"
+            echo "\`\`\`"
+            echo ""
+            echo "**Post-install:** Run GUI with \`sudo -E yeetmouse-gui\`"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create release with packages
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-v${{ needs.build-rpm.outputs.version }}-${{ needs.build-rpm.outputs.short_commit }}
+          files: artifacts/release-packages/*
+          body: ${{ steps.release_notes.outputs.notes }}
+
+      - name: Prepare merged repository
+        run: |
+          # Install createrepo_c for metadata generation
+          sudo apt-get update
+          sudo apt-get install -y createrepo-c
+
+          # Clone existing gh-pages branch to get current packages
+          git clone --depth=1 --branch=gh-pages \
+            https://github.com/${{ github.repository }}.git gh-pages-repo \
+            || mkdir -p gh-pages-repo
+
+          # Prepare repo with existing + new packages
+          mkdir -p repo
+          # Copy only RPM files from existing repo (not directories/metadata)
+          find gh-pages-repo -maxdepth 1 -name "*.rpm" \
+            -exec cp {} repo/ \; 2>/dev/null || true
+          cp artifacts/release-packages/*.rpm repo/ 2>/dev/null || true
+
+          # Regenerate metadata for ALL packages
+          createrepo_c repo/
+
+      - name: Deploy repo to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: repo
+          keep_files: true
+
+  cleanup-on-failure:
+    needs: [update-specs, build-rpm, publish]
+    runs-on: ubuntu-latest
+    if: failure() && needs.update-specs.result == 'success'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Revert spec update commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          COMMIT_SHA="${{ needs.update-specs.outputs.commit_sha }}"
+          echo "Reverting commit: $COMMIT_SHA"
+          
+          git revert $COMMIT_SHA --no-edit
+          git push
+          echo "Successfully reverted spec update due to build/publish failure"

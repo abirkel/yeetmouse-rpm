@@ -20,9 +20,11 @@ jobs:
         id: config
         run: |
           source build.conf
-          echo "container_image=$CONTAINER_IMAGE" >> $GITHUB_ENV
-          echo "container_version=$CONTAINER_VERSION" >> $GITHUB_ENV
-          echo "enable_kmod=$ENABLE_KMOD" >> $GITHUB_OUTPUT
+          {
+            echo "container_image=$CONTAINER_IMAGE"
+            echo "container_version=$CONTAINER_VERSION"
+            echo "enable_kmod=$ENABLE_KMOD"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Get latest YeetMouse commit
         id: get_commit

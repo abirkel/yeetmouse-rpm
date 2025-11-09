@@ -70,8 +70,8 @@ jobs:
         if: steps.config.outputs.enable_kmod == 'true'
         id: check_kernel
         run: |
-          IMAGE_FULL="${{ env.container_image }}"
-          CONTAINER_VERSION="${{ env.container_version }}"
+          IMAGE_FULL="${{ steps.config.outputs.container_image }}"
+          CONTAINER_VERSION="${{ steps.config.outputs.container_version }}"
 
           # Pull image
           docker pull "${IMAGE_FULL}:${CONTAINER_VERSION}"

@@ -30,7 +30,7 @@ jobs:
         id: get_commit
         run: |
           LATEST_COMMIT=$(gh api \
-            repos/AndyFilter/YeetMouse/commits/main --jq '.sha')
+            repos/AndyFilter/YeetMouse/commits/master --jq '.sha')
           SHORT_COMMIT=$(echo "$LATEST_COMMIT" | cut -c1-7)
           echo "latest_commit=$LATEST_COMMIT" >> "$GITHUB_OUTPUT"
           echo "short_commit=$SHORT_COMMIT" >> "$GITHUB_OUTPUT"

@@ -18,7 +18,6 @@ dist/
 .kiro
 yeetmouse-ref/
 maccel-rpm/
-build-output/
 
 # Python
 __pycache__/

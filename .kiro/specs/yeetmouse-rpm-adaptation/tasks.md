@@ -279,7 +279,9 @@
     - Include build failure debugging
     - _Requirements: 12.5_
 
-- [ ] 6. Configure GitHub repository settings
+- [x] 6. Configure GitHub repository settings
+
+
   - [X] 6.1 Generate and configure GPG secrets
     - Generate GPG key pair for package signing
     - Export private key and encode as base64
@@ -288,12 +290,15 @@
     - Add GPG_KEY_ID secret to repository
     - _Requirements: 10.1_
   
-  - [ ] 6.2 Enable GitHub Pages
+  - [x] 6.2 Enable GitHub Pages
+
     - Configure repository to deploy from gh-pages branch
     - Verify Pages URL is accessible
     - _Requirements: 10.4_
   
-  - [ ] 6.3 Configure workflow permissions
+  - [x] 6.3 Configure workflow permissions
+
+
     - Ensure workflows have write access to contents
     - Ensure workflows have write access to packages
     - _Requirements: Workflow execution_
@@ -331,7 +336,10 @@
     - Verify package signatures
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 12.4_
 
-- [ ] 8. Clean up proof-of-concept files
+
+- [-] 8. Clean up proof-of-concept files
+
+
   - Remove or archive build.sh script
   - Remove or archive container/ directory with Dockerfile and build-inside.sh
   - Remove or archive build-output/ directory

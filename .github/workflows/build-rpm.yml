@@ -166,8 +166,14 @@ jobs:
 
             # Extract current values from spec file
             CURRENT_VERSION=$(grep "^Version:" "$spec" | awk '{print $NF}')
-            CURRENT_RELEASE=$(grep "^Release:" "$spec" | \
-              awk '{print $NF}' | sed 's/\.git.*//; s/%{?dist}//')
+            CURRENT_RELEASE_RAW=$(grep "^Release:" "$spec" | awk '{print $NF}')
+            # Extract numeric release number, handling RPM macros
+            if [[ "$CURRENT_RELEASE_RAW" =~ ^[0-9]+ ]]; then
+              CURRENT_RELEASE="${BASH_REMATCH[0]}"
+            else
+              # If no numeric prefix, default to 1
+              CURRENT_RELEASE=1
+            fi
             CURRENT_COMMIT=$(grep "^%global commit" "$spec" | awk '{print $NF}')
 
             # Determine new release number and changelog message

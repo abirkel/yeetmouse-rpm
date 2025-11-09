@@ -1,0 +1,179 @@
+---
+name: Check Upstream Versions
+
+'on':
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  check_release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load container config
+        id: config
+        run: |
+          source build.conf
+          echo "container_image=$CONTAINER_IMAGE" >> $GITHUB_ENV
+          echo "container_version=$CONTAINER_VERSION" >> $GITHUB_ENV
+          echo "enable_kmod=$ENABLE_KMOD" >> $GITHUB_OUTPUT
+
+      - name: Get latest YeetMouse commit
+        id: get_commit
+        run: |
+          LATEST_COMMIT=$(gh api \
+            repos/AndyFilter/YeetMouse/commits/main --jq '.sha')
+          SHORT_COMMIT=$(echo "$LATEST_COMMIT" | cut -c1-7)
+          echo "latest_commit=$LATEST_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "short_commit=$SHORT_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "Latest YeetMouse commit: $LATEST_COMMIT ($SHORT_COMMIT)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Load current versions
+        id: load_versions
+        run: |
+          if [ -f .external_versions ]; then
+            source .external_versions
+            echo "yeetmouse_commit=${YEETMOUSE_COMMIT:-}" >> "$GITHUB_OUTPUT"
+            echo "kernel_version=${KERNEL_VERSION:-}" >> "$GITHUB_OUTPUT"
+          else
+            echo "yeetmouse_commit=" >> "$GITHUB_OUTPUT"
+            echo "kernel_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check if commit is new
+        id: check_new
+        run: |
+          LATEST_COMMIT="${{ steps.get_commit.outputs.latest_commit }}"
+          CURRENT_COMMIT="${{ steps.load_versions.outputs.yeetmouse_commit }}"
+
+          echo "Current tracked commit: ${CURRENT_COMMIT:-none}"
+
+          if [ "$LATEST_COMMIT" != "$CURRENT_COMMIT" ]; then
+            echo "is_new=true" >> "$GITHUB_OUTPUT"
+            echo "New commit detected: $LATEST_COMMIT"
+          else
+            echo "is_new=false" >> "$GITHUB_OUTPUT"
+            echo "No new commit (current: $CURRENT_COMMIT)"
+          fi
+
+      - name: Check container kernel version
+        if: steps.config.outputs.enable_kmod == 'true'
+        id: check_kernel
+        run: |
+          IMAGE_FULL="${{ env.container_image }}"
+          CONTAINER_VERSION="${{ env.container_version }}"
+
+          # Pull image
+          docker pull "${IMAGE_FULL}:${CONTAINER_VERSION}"
+
+          # Extract kernel version from image label
+          LATEST_KERNEL=$(docker inspect \
+            --format='{{index .Config.Labels "ostree.linux"}}' \
+            "${IMAGE_FULL}:${CONTAINER_VERSION}")
+
+          if [ -z "$LATEST_KERNEL" ]; then
+            echo "ERROR: Failed to extract kernel version from image labels"
+            exit 1
+          fi
+
+          CURRENT_KERNEL="${{ steps.load_versions.outputs.kernel_version }}"
+
+          echo "kernel_version=$LATEST_KERNEL" >> "$GITHUB_OUTPUT"
+          echo "Latest kernel version: $LATEST_KERNEL"
+          echo "Current tracked kernel: ${CURRENT_KERNEL:-none}"
+
+          if [ "$LATEST_KERNEL" != "$CURRENT_KERNEL" ]; then
+            echo "is_new=true" >> "$GITHUB_OUTPUT"
+            echo "Kernel version changed"
+          else
+            echo "is_new=false" >> "$GITHUB_OUTPUT"
+            echo "No kernel version change"
+          fi
+
+      - name: Update versions file
+        if: |
+          steps.check_new.outputs.is_new == 'true' ||
+          (steps.config.outputs.enable_kmod == 'true' &&
+           steps.check_kernel.outputs.is_new == 'true')
+        run: |
+          # Always use latest yeetmouse commit
+          YEETMOUSE_COMMIT="${{ steps.get_commit.outputs.latest_commit }}"
+
+          # Use new kernel if checked, otherwise keep old value
+          if [ "${{ steps.config.outputs.enable_kmod }}" == "true" ]; then
+            KERNEL_VERSION="${{ steps.check_kernel.outputs.kernel_version }}"
+          else
+            KERNEL_VERSION="${{ steps.load_versions.outputs.kernel_version }}"
+          fi
+
+          # Write complete file
+          {
+            echo "YEETMOUSE_COMMIT=$YEETMOUSE_COMMIT"
+            echo "KERNEL_VERSION=$KERNEL_VERSION"
+          } > .external_versions
+
+          # Smart commit message
+          SHORT_COMMIT="${{ steps.get_commit.outputs.short_commit }}"
+          if [ "${{ steps.check_new.outputs.is_new }}" == "true" ] && \
+             [ "${{ steps.check_kernel.outputs.is_new }}" == "true" ]; then
+            MSG="chore: update yeetmouse to $SHORT_COMMIT"
+            MSG="$MSG and kernel to $KERNEL_VERSION"
+          elif [ "${{ steps.check_new.outputs.is_new }}" == "true" ]; then
+            MSG="chore: update yeetmouse to $SHORT_COMMIT"
+          else
+            MSG="chore: update kernel to $KERNEL_VERSION"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .external_versions
+          git commit -m "$MSG" && git push
+
+      - name: Trigger RPM build workflow
+        if: |
+          steps.check_new.outputs.is_new == 'true' ||
+          (steps.config.outputs.enable_kmod == 'true' &&
+           steps.check_kernel.outputs.is_new == 'true')
+        run: |
+          # Determine what to build based on what changed
+          YEETMOUSE_NEW="${{ steps.check_new.outputs.is_new }}"
+          KERNEL_NEW="${{ steps.check_kernel.outputs.is_new }}"
+          ENABLE_KMOD="${{ steps.config.outputs.enable_kmod }}"
+
+          # If yeetmouse is new, build akmod and cli (and kmod if enabled)
+          # If only kernel is new, build kmod only (if enabled)
+          if [ "$YEETMOUSE_NEW" == "true" ]; then
+            BUILD_AKMOD=true
+            BUILD_CLI=true
+            if [ "$ENABLE_KMOD" == "true" ]; then
+              BUILD_KMOD=true
+            else
+              BUILD_KMOD=false
+            fi
+          elif [ "$KERNEL_NEW" == "true" ] && [ "$ENABLE_KMOD" == "true" ]; then
+            BUILD_AKMOD=false
+            BUILD_CLI=false
+            BUILD_KMOD=true
+          else
+            echo "Nothing to build"
+            exit 0
+          fi
+
+          YEETMOUSE_COMMIT="${{ steps.get_commit.outputs.latest_commit }}"
+
+          gh workflow run build-rpm.yml --ref ${{ github.ref_name }} \
+            -f yeetmouse_commit=$YEETMOUSE_COMMIT \
+            -f update_specs=true \
+            -f build_akmod=$BUILD_AKMOD \
+            -f build_cli=$BUILD_CLI \
+            -f build_kmod=$BUILD_KMOD
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

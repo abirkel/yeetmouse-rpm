@@ -4,7 +4,7 @@
 
 Name:           akmod-yeetmouse
 Version:        0.9.2
-Release:        %{?release_number}%{!?release_number:1}.git%{shortcommit}%{?dist}
+Release:        2.git%{shortcommit}%{?dist}
 Summary:        Automatic kernel module for YeetMouse mouse acceleration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -56,6 +56,8 @@ cp Makefile %{buildroot}/usr/src/akmods/yeetmouse-%{version}/
 /usr/src/akmods/yeetmouse-%{version}
 
 %changelog
+* Sun Nov 09 2025 github-actions[bot]   <github-actions[bot]@users.noreply.github.com> - 0.9.2-2.git99844bb
+- Rebuild for kernel compatibility
 * Fri Nov 07 2025 YeetMouse Builder <builder@yeetmouse.local> - 0.9.2-1.git99844bb
 - Update to git snapshot 99844bb
 - Fix spec to use proper git snapshot source URL

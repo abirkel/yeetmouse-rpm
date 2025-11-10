@@ -1,6 +1,6 @@
 [yeetmouse]
 name=Yeetmouse RPM Repository
-baseurl=https://abirkel.github.io/yeetmouse-rpm/repo/
+baseurl=https://abirkel.github.io/yeetmouse-rpm/
 enabled=1
 gpgcheck=1
 gpgkey=https://raw.githubusercontent.com/abirkel/yeetmouse-rpm/main/RPM-GPG-KEY-yeetmouse

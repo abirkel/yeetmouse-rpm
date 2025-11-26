@@ -8,6 +8,9 @@ build/
 dist/
 *.egg-info/
 
+# Note: .external_versions should be tracked (not ignored)
+# It contains version information for automated builds
+
 # IDE and editor files
 .vscode/
 .idea/

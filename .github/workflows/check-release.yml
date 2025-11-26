@@ -26,7 +26,7 @@ jobs:
         id: get_yeetmouse
         run: |
           LATEST_COMMIT=$(gh api \
-            repos/abirkel/YeetMouse/commits/main --jq '.sha')
+            repos/AndyFilter/YeetMouse/commits/main --jq '.sha')
           echo "latest_commit=$LATEST_COMMIT" >> "$GITHUB_OUTPUT"
           echo "Latest YeetMouse commit: $LATEST_COMMIT"
         env:

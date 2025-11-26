@@ -12,27 +12,10 @@ This repository provides automated RPM packaging for YeetMouse, a customizable m
 
 ## Packages
 
-This repository provides three packages:
-
-- **akmod-yeetmouse**: Automatic kernel module package that rebuilds for new kernels using akmods
-- **kmod-yeetmouse**: Pre-compiled kernel module for specific kernel versions (optional)
-- **yeetmouse-gui**: GUI application for configuring mouse acceleration parameters
-
-### Akmod vs Kmod
-
-**Akmod (Recommended for most users)**:
-- Automatically rebuilds the kernel module when your kernel updates
-- Works across kernel updates without manual intervention
-- Requires kernel-devel and build tools on your system
-- Slightly longer initial installation time (builds on first install)
-
-**Kmod (Alternative)**:
-- Pre-compiled kernel module for specific kernel versions
-- Faster installation (no compilation needed)
-- Must match your exact kernel version
-- Requires new package when kernel updates
-
-For most users, the akmod package is recommended as it provides automatic compatibility with kernel updates.
+- **kmod-yeetmouse**: Pre-compiled kernel module packages for specific kernel versions
+  - Built for both Aurora (main kernel) and Bazzite (custom kernel) distributions
+  - Automatically rebuilt when kernel versions change
+- **yeetmouse**: GUI application for configuring mouse acceleration parameters
 
 ## Installation
 
@@ -55,14 +38,11 @@ The GPG public key will be automatically imported when you first install a packa
 Install YeetMouse and its dependencies:
 
 ```bash
-# Install YeetMouse with akmod (recommended)
-sudo dnf install akmod-yeetmouse yeetmouse-gui
-
-# Alternative: Install with pre-compiled kmod (if available for your kernel)
-sudo dnf install kmod-yeetmouse yeetmouse-gui
+# Install yeetmouse (automatically installs kmod-yeetmouse as a dependency)
+sudo dnf install yeetmouse
 ```
 
-The akmod system will build the kernel module for your current kernel during installation. This may take a few minutes on first install.
+The `yeetmouse` package will automatically pull in the appropriate `kmod-yeetmouse` package for your kernel version. The kmod package is pre-compiled for your specific kernel, so installation is fast and doesn't require compilation.
 
 ### Post-Installation
 
@@ -98,7 +78,7 @@ The YeetMouse GUI requires root privileges to modify kernel module parameters. R
 sudo -E yeetmouse-gui
 ```
 
-The `-E` flag preserves your environment variables, ensuring the GUI displays correctly on your desktop.
+The `-E` flag preserves your environment variables, ensuring the GUI displays correctly on your desktop. The binary is installed as `/usr/bin/yeetmouse-gui`.
 
 **3. Configure Mouse Acceleration**
 
@@ -119,9 +99,14 @@ For additional help, see the [upstream YeetMouse issues](https://github.com/Andy
 
 ## Automated Builds
 
-This repository automatically builds and publishes RPM packages when new YeetMouse commits are detected. Packages are built daily and deployed to the GitHub Pages repository.
+This repository automatically builds and publishes RPM packages when:
+- New YeetMouse commits are detected
+- Aurora kernel version changes
+- Bazzite kernel version changes
 
-For detailed information about the build workflow architecture, manual build options, and configuration, see the [Workflows Guide](WORKFLOWS.md).
+The workflow monitors both Aurora and Bazzite images daily and builds kmod packages for the appropriate kernel types. Packages are deployed to the GitHub Pages repository.
+
+For detailed information about the build workflow architecture, kernel types, manual build options, and configuration, see the [Workflows Guide](WORKFLOWS.md).
 
 ## Building Locally
 

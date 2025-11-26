@@ -4,45 +4,42 @@ This guide covers how to build the YeetMouse RPM packages locally on your system
 
 ## Container Requirements (GitHub Actions)
 
-The automated build workflows use containers to ensure consistent builds. **Important**: kmod builds require a full OS container with kernel development tools installed.
+The automated build workflows use containers to ensure consistent builds. The workflow dynamically fetches kernel-devel packages based on the kernel type being built.
 
-### Why Full OS Images are Required for kmod
+### Kernel-devel Package Sources
 
-This workflow is designed to build kmod packages for uBlue atomic images against the kernel-devel packages installed in those images. uBlue images often ship with kernels slightly behind Fedora main, and the corresponding kernel-devel packages are no longer available in the standard Fedora repositories. The only way to get these older kernel-devel packages is from the images themselves.
+**Main kernel type**:
+- Downloads kernel-devel from Fedora Koji repositories
+- URL: `https://kojipkgs.fedoraproject.org/packages/kernel/`
+- Used for Aurora and standard Fedora distributions
 
-**Current Limitation**: The workflow does not yet support building kmod against the latest Fedora kernel from repositories. It only builds against the kernel-devel found in the container image.
+**Bazzite kernel type**:
+- Downloads kernel-devel from Bazzite kernel repository
+- Used for Bazzite gaming distribution
 
 ### Container Image Selection
 
-**For kmod builds** (building pre-compiled kernel modules):
-- **Required**: Full OS container with kernel-devel installed
-- **Recommended**: `ghcr.io/ublue-os/aurora-nvidia-open` (uBlue Aurora with kernel-devel)
-- **Why**: Contains the kernel-devel package matching the image's kernel version
-- **Not suitable**: Minimal containers like `fedora:minimal` (missing kernel-devel)
+The container image should have basic build tools installed. The workflow installs kernel-devel packages dynamically during the build process.
 
-**For akmod + GUI only** (no kmod):
-- **Flexible**: Can use smaller Fedora tooling images
-- **Example**: `fedora:latest` or `fedora:40`
-- **Benefit**: Faster builds, smaller image size
-- **Note**: akmod packages are kernel-agnostic and rebuild on user systems
+**Recommended images**:
+- `ghcr.io/ublue-os/aurora:latest` - Aurora base image
+- `quay.io/fedora/fedora:latest` - Standard Fedora
+- `fedora:43` - Specific Fedora version
 
 ### Configuration
 
 The container image is configured in `build.conf` at the repository root:
 
 ```bash
-# For kmod builds (requires full OS with kernel-devel)
-CONTAINER_IMAGE=ghcr.io/ublue-os/aurora-nvidia-open
+CONTAINER_IMAGE=ghcr.io/ublue-os/aurora
 CONTAINER_VERSION=latest
-ENABLE_KMOD=true
-
-# For akmod + GUI only (can use minimal image)
-# CONTAINER_IMAGE=fedora
-# CONTAINER_VERSION=latest
-# ENABLE_KMOD=false
+DEFAULT_KERNEL_TYPE=main
 ```
 
-To disable kmod builds entirely and use a smaller image, set `ENABLE_KMOD=false`.
+**Configuration Options**:
+- `CONTAINER_IMAGE`: Default container image for builds
+- `CONTAINER_VERSION`: Container image tag/version
+- `DEFAULT_KERNEL_TYPE`: Default kernel type (main or bazzite)
 
 ## Prerequisites
 
@@ -57,7 +54,7 @@ sudo dnf install rpm-build rpmdevtools rpmlint akmods kmodtool \
 
 ## Build Process
 
-Follow these steps to build the packages:
+Follow these steps to build the packages locally:
 
 ```bash
 # Clone this repository
@@ -67,30 +64,61 @@ cd yeetmouse-rpm
 # Set up RPM build tree
 rpmdev-setuptree
 
-# Copy spec files to see what version they specify
+# Copy spec files
 cp specs/*.spec ~/rpmbuild/SPECS/
 cd ~/rpmbuild/SPECS
 
-# Check the version and commit in the spec file
-grep "^%global commit" akmod-yeetmouse.spec
-grep "^Version:" akmod-yeetmouse.spec
+# Set version variables
+YEETMOUSE_COMMIT="99844bbd786d612657d892cac2f663d940fd3d62"  # Full commit hash
+KERNEL_VERSION=$(uname -r)
+RELEASE_NUMBER="1"
 
-# Download the YeetMouse source (spectool reads from spec file)
-spectool -g -R akmod-yeetmouse.spec
+# Download the YeetMouse source
 spectool -g -R kmod-yeetmouse.spec
-spectool -g -R yeetmouse-gui.spec
+spectool -g -R yeetmouse.spec
 
-# Build the packages
-rpmbuild -ba akmod-yeetmouse.spec
-rpmbuild -ba kmod-yeetmouse.spec
-rpmbuild -ba yeetmouse-gui.spec
+# Build the kmod package
+rpmbuild --define "kernel_version ${KERNEL_VERSION}" \
+         --define "commit ${YEETMOUSE_COMMIT}" \
+         --define "release ${RELEASE_NUMBER}" \
+         -ba kmod-yeetmouse.spec
+
+# Build the CLI package
+rpmbuild --define "commit ${YEETMOUSE_COMMIT}" \
+         --define "release ${RELEASE_NUMBER}" \
+         -ba yeetmouse.spec
 
 # Find built packages
 ls -l ~/rpmbuild/RPMS/x86_64/
 ls -l ~/rpmbuild/SRPMS/
 ```
 
-**Note**: The spec files contain the commit hash and version to build. To build a different commit, edit the `%global commit` and `Version:` fields in the spec files before running spectool and rpmbuild.
+**Note**: The spec files use RPM macros for version and release numbers. You must pass these values via `--define` parameters to rpmbuild.
+
+### Building for Different Kernel Versions
+
+To build kmod packages for a specific kernel version:
+
+```bash
+# Install kernel-devel for target kernel
+sudo dnf install kernel-devel-6.17.8-300.fc43.x86_64
+
+# Set the kernel version
+KERNEL_VERSION="6.17.8-300.fc43.x86_64"
+YEETMOUSE_COMMIT="99844bbd786d612657d892cac2f663d940fd3d62"
+RELEASE_NUMBER="1"
+
+# Build kmod for that kernel
+rpmbuild --define "kernel_version ${KERNEL_VERSION}" \
+         --define "commit ${YEETMOUSE_COMMIT}" \
+         --define "release ${RELEASE_NUMBER}" \
+         -ba ~/rpmbuild/SPECS/kmod-yeetmouse.spec
+
+# Find built kmod packages
+ls -l ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse*
+```
+
+**Package Naming**: The kmod package will be named `kmod-yeetmouse-{version}-{release}.{kernel_version}.rpm`, ensuring it's specific to that kernel version.
 
 ## Installing Local Builds
 
@@ -98,54 +126,38 @@ Once the packages are built, you can install them:
 
 ```bash
 # Install the locally built packages
-sudo dnf install ~/rpmbuild/RPMS/x86_64/akmod-yeetmouse-*.rpm
-sudo dnf install ~/rpmbuild/RPMS/x86_64/yeetmouse-gui-*.rpm
-
-# Or install kmod instead of akmod
 sudo dnf install ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm
-sudo dnf install ~/rpmbuild/RPMS/x86_64/yeetmouse-gui-*.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/yeetmouse-*.rpm
 ```
 
 ## Modifying the Spec Files
 
 The spec files are located in the `specs/` directory:
 
-- `specs/akmod-yeetmouse.spec` - Automatic kernel module package
-- `specs/kmod-yeetmouse.spec` - Pre-compiled kernel module package
-- `specs/yeetmouse-gui.spec` - GUI application package
+- `specs/kmod-yeetmouse.spec` - Kernel module package
+- `specs/yeetmouse.spec` - CLI tool package
 
-### Updating to a New Commit
-
-To build a different YeetMouse commit:
-
-1. Find the commit hash you want to build from the [YeetMouse repository](https://github.com/AndyFilter/YeetMouse)
-2. Extract the DKMS_VER from that commit's Makefile
-3. Update all three spec files:
-
-```bash
-# Example: Update to commit 99844bbd786d612657d892cac2f663d940fd3d62
-NEW_COMMIT="99844bbd786d612657d892cac2f663d940fd3d62"
-SHORT_COMMIT="${NEW_COMMIT:0:7}"
-
-# Extract DKMS_VER from the commit
-curl -sL "https://raw.githubusercontent.com/AndyFilter/YeetMouse/${NEW_COMMIT}/Makefile" | \
-  grep "^DKMS_VER" | cut -d'=' -f2 | xargs
-
-# Update spec files
-sed -i "s/^%global commit.*/%global commit ${NEW_COMMIT}/" specs/*.spec
-sed -i "s/^%global shortcommit.*/%global shortcommit ${SHORT_COMMIT}/" specs/*.spec
-sed -i "s/^Version:.*/Version:        <DKMS_VER>/" specs/*.spec
-sed -i "s/^Release:.*/Release:        1.git%{shortcommit}%{?dist}/" specs/*.spec
+The spec files use RPM macros for version and release numbers:
+```spec
+Version:        %{?version}%{!?version:0.9.2}
+Release:        %{?release}%{!?release:1}%{?dist}
 ```
 
-After making changes to the spec files, copy them to your RPM build tree and rebuild:
+After making changes to the spec files, copy them to your RPM build tree and rebuild with appropriate macros:
 
 ```bash
 cp specs/*.spec ~/rpmbuild/SPECS/
 cd ~/rpmbuild/SPECS
-rpmbuild -ba akmod-yeetmouse.spec
-rpmbuild -ba kmod-yeetmouse.spec
-rpmbuild -ba yeetmouse-gui.spec
+
+# Build with version/release macros
+rpmbuild --define "commit 99844bbd786d612657d892cac2f663d940fd3d62" \
+         --define "release 1" \
+         --define "kernel_version $(uname -r)" \
+         -ba kmod-yeetmouse.spec
+
+rpmbuild --define "commit 99844bbd786d612657d892cac2f663d940fd3d62" \
+         --define "release 1" \
+         -ba yeetmouse.spec
 ```
 
 ## Linting
@@ -156,7 +168,78 @@ Before committing changes, lint the spec files:
 rpmlint specs/*.spec
 ```
 
-Address any errors reported by rpmlint. Some warnings may be acceptable depending on context.
+## Troubleshooting
+
+### Build Failures
+
+**Missing kernel-devel**
+```bash
+# Install kernel-devel for your kernel
+sudo dnf install kernel-devel-$(uname -r)
+
+# Or for a specific kernel version
+sudo dnf install kernel-devel-6.17.8-300.fc43.x86_64
+
+# Check available kernel-devel versions
+dnf list available kernel-devel
+```
+
+**RPM macro errors**
+```bash
+# Ensure you're passing all required macros
+rpmbuild --define "kernel_version $(uname -r)" \
+         --define "commit 99844bbd786d612657d892cac2f663d940fd3d62" \
+         --define "release 1" \
+         -ba kmod-yeetmouse.spec
+
+# Check spec file for required macros
+grep -E "%(version|release|kernel_version|commit)" specs/kmod-yeetmouse.spec
+```
+
+**Compilation errors**
+```bash
+# Check build logs
+less ~/rpmbuild/BUILD/yeetmouse-*/build.log
+
+# Verify kernel-devel matches your kernel
+rpm -q kernel-devel
+
+# Ensure build dependencies are installed
+sudo dnf builddep specs/kmod-yeetmouse.spec
+```
+
+**Module fails to load after installation**
+```bash
+# Check if module was built
+ls -la /lib/modules/$(uname -r)/extra/yeetmouse/
+
+# Try loading manually with verbose output
+sudo modprobe -v yeetmouse
+
+# Check kernel logs for errors
+sudo dmesg | grep yeetmouse
+
+# Verify module signature (if secure boot enabled)
+modinfo yeetmouse | grep signature
+```
+
+### Version Mismatch Issues
+
+**kmod package doesn't match running kernel**
+```bash
+# Check your kernel version
+uname -r
+
+# Build kmod for your specific kernel
+KERNEL_VERSION=$(uname -r)
+rpmbuild --define "kernel_version ${KERNEL_VERSION}" \
+         --define "commit 99844bbd786d612657d892cac2f663d940fd3d62" \
+         --define "release 1" \
+         -ba kmod-yeetmouse.spec
+
+# Install the matching package
+sudo dnf install ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*$(uname -r)*.rpm
+```
 
 ## GitHub Actions Secrets
 
@@ -171,24 +254,6 @@ The automated build workflow requires the following secrets to be configured in 
 - **`GPG_PASSPHRASE`**: Passphrase for the GPG private key
 
 - **`GPG_KEY_ID`**: The GPG key ID used for signing (e.g., `1234567890ABCDEF`)
-
-### Generating GPG Keys
-
-If you don't have a GPG key yet:
-
-```bash
-# Generate a new GPG key
-gpg --full-generate-key
-
-# List your keys to find the key ID
-gpg --list-secret-keys --keyid-format=long
-
-# Export the public key to the repository
-gpg --armor --export <KEY_ID> > RPM-GPG-KEY-yeetmouse
-
-# Export the private key as base64 for GitHub secrets
-gpg --export-secret-key --armor <KEY_ID> | base64 -w0
-```
 
 ### Setting Up Secrets
 
@@ -206,40 +271,5 @@ Users can verify the authenticity of published packages using:
 rpm --import https://raw.githubusercontent.com/<owner>/<repo>/main/RPM-GPG-KEY-yeetmouse
 
 # Verify a package
-rpm -K ~/rpmbuild/RPMS/x86_64/yeetmouse-gui-*.rpm
+rpm -K ~/rpmbuild/RPMS/x86_64/yeetmouse-*.rpm
 ```
-
-## Troubleshooting Local Builds
-
-### Missing Dependencies
-
-If rpmbuild fails with missing dependencies:
-
-```bash
-# Install BuildRequires from spec files
-sudo dnf builddep specs/akmod-yeetmouse.spec
-sudo dnf builddep specs/kmod-yeetmouse.spec
-sudo dnf builddep specs/yeetmouse-gui.spec
-```
-
-### Source Download Failures
-
-If spectool cannot download the source:
-
-1. Verify the commit hash exists in the YeetMouse repository
-2. Check your internet connection
-3. Manually download the source:
-
-```bash
-COMMIT="99844bbd786d612657d892cac2f663d940fd3d62"
-wget "https://github.com/AndyFilter/YeetMouse/archive/${COMMIT}/YeetMouse-${COMMIT}.tar.gz" \
-  -O ~/rpmbuild/SOURCES/YeetMouse-${COMMIT}.tar.gz
-```
-
-### kmod Build Failures
-
-If kmod builds fail with "kernel-devel not found":
-
-1. Ensure kernel-devel is installed: `sudo dnf install kernel-devel`
-2. Verify it matches your running kernel: `uname -r`
-3. If building for a different kernel, install the matching kernel-devel package

@@ -3,7 +3,8 @@ name: Check Upstream Versions
 
 'on':
   schedule:
-    - cron: '0 0 * * *'
+    # Build at 06:00 UTC every day (20 min after ublue images start building)
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -16,166 +17,196 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Load container config
-        id: config
+      - name: Install dependencies
         run: |
-          source build.conf
-          {
-            echo "container_image=$CONTAINER_IMAGE"
-            echo "container_version=$CONTAINER_VERSION"
-            echo "enable_kmod=$ENABLE_KMOD"
-          } >> "$GITHUB_OUTPUT"
+          sudo apt-get update
+          sudo apt-get install -y skopeo jq
 
       - name: Get latest YeetMouse commit
-        id: get_commit
+        id: get_yeetmouse
         run: |
           LATEST_COMMIT=$(gh api \
-            repos/AndyFilter/YeetMouse/commits/master --jq '.sha')
-          SHORT_COMMIT=$(echo "$LATEST_COMMIT" | cut -c1-7)
+            repos/abirkel/YeetMouse/commits/main --jq '.sha')
           echo "latest_commit=$LATEST_COMMIT" >> "$GITHUB_OUTPUT"
-          echo "short_commit=$SHORT_COMMIT" >> "$GITHUB_OUTPUT"
-          echo "Latest YeetMouse commit: $LATEST_COMMIT ($SHORT_COMMIT)"
+          echo "Latest YeetMouse commit: $LATEST_COMMIT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get Aurora kernel version
+        id: get_aurora_kernel
+        run: |
+          chmod +x scripts/resolve-kernel-version.sh
+          AURORA_KERNEL=$(
+            ./scripts/resolve-kernel-version.sh --kernel-type main
+          )
+          echo "kernel_version=$AURORA_KERNEL" >> "$GITHUB_OUTPUT"
+          echo "Aurora kernel version: $AURORA_KERNEL"
+
+      - name: Get Bazzite kernel version
+        id: get_bazzite_kernel
+        run: |
+          BAZZITE_KERNEL=$(
+            ./scripts/resolve-kernel-version.sh --kernel-type bazzite
+          )
+          echo "kernel_version=$BAZZITE_KERNEL" >> "$GITHUB_OUTPUT"
+          echo "Bazzite kernel version: $BAZZITE_KERNEL"
 
       - name: Load current versions
         id: load_versions
         run: |
           if [ -f .external_versions ]; then
             source .external_versions
-            echo "yeetmouse_commit=${YEETMOUSE_COMMIT:-}" >> "$GITHUB_OUTPUT"
-            echo "kernel_version=${KERNEL_VERSION:-}" >> "$GITHUB_OUTPUT"
+            echo "yeetmouse_commit=${YEETMOUSE_COMMIT:-}" \
+              >> "$GITHUB_OUTPUT"
+            echo "aurora_kernel_version=${AURORA_KERNEL_VERSION:-}" \
+              >> "$GITHUB_OUTPUT"
+            echo "bazzite_kernel_version=${BAZZITE_KERNEL_VERSION:-}" \
+              >> "$GITHUB_OUTPUT"
           else
             echo "yeetmouse_commit=" >> "$GITHUB_OUTPUT"
-            echo "kernel_version=" >> "$GITHUB_OUTPUT"
+            echo "aurora_kernel_version=" >> "$GITHUB_OUTPUT"
+            echo "bazzite_kernel_version=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check if commit is new
-        id: check_new
+      - name: Compare versions and determine build targets
+        id: check_changes
         run: |
-          LATEST_COMMIT="${{ steps.get_commit.outputs.latest_commit }}"
-          CURRENT_COMMIT="${{ steps.load_versions.outputs.yeetmouse_commit }}"
+          LATEST_YEETMOUSE="${{ steps.get_yeetmouse.outputs.latest_commit }}"
+          CURRENT_YEETMOUSE="${{
+            steps.load_versions.outputs.yeetmouse_commit
+          }}"
 
-          echo "Current tracked commit: ${CURRENT_COMMIT:-none}"
+          LATEST_AURORA="${{
+            steps.get_aurora_kernel.outputs.kernel_version
+          }}"
+          CURRENT_AURORA="${{
+            steps.load_versions.outputs.aurora_kernel_version
+          }}"
 
-          if [ "$LATEST_COMMIT" != "$CURRENT_COMMIT" ]; then
-            echo "is_new=true" >> "$GITHUB_OUTPUT"
-            echo "New commit detected: $LATEST_COMMIT"
-          else
-            echo "is_new=false" >> "$GITHUB_OUTPUT"
-            echo "No new commit (current: $CURRENT_COMMIT)"
+          LATEST_BAZZITE="${{
+            steps.get_bazzite_kernel.outputs.kernel_version
+          }}"
+          CURRENT_BAZZITE="${{
+            steps.load_versions.outputs.bazzite_kernel_version
+          }}"
+
+          echo "=== Version Comparison ==="
+          echo "YeetMouse: $CURRENT_YEETMOUSE -> $LATEST_YEETMOUSE"
+          echo "Aurora:    $CURRENT_AURORA -> $LATEST_AURORA"
+          echo "Bazzite:   $CURRENT_BAZZITE -> $LATEST_BAZZITE"
+
+          # Determine what changed
+          YEETMOUSE_CHANGED=false
+          AURORA_CHANGED=false
+          BAZZITE_CHANGED=false
+
+          if [ "$LATEST_YEETMOUSE" != "$CURRENT_YEETMOUSE" ]; then
+            YEETMOUSE_CHANGED=true
+            echo "✓ YeetMouse commit changed"
           fi
 
-      - name: Check container kernel version
-        if: steps.config.outputs.enable_kmod == 'true'
-        id: check_kernel
-        run: |
-          IMAGE_FULL="${{ steps.config.outputs.container_image }}"
-          CONTAINER_VERSION="${{ steps.config.outputs.container_version }}"
-
-          # Pull image
-          docker pull "${IMAGE_FULL}:${CONTAINER_VERSION}"
-
-          # Extract kernel version from image label
-          LATEST_KERNEL=$(docker inspect \
-            --format='{{index .Config.Labels "ostree.linux"}}' \
-            "${IMAGE_FULL}:${CONTAINER_VERSION}")
-
-          if [ -z "$LATEST_KERNEL" ]; then
-            echo "ERROR: Failed to extract kernel version from image labels"
-            exit 1
+          if [ "$LATEST_AURORA" != "$CURRENT_AURORA" ]; then
+            AURORA_CHANGED=true
+            echo "✓ Aurora kernel version changed"
           fi
 
-          CURRENT_KERNEL="${{ steps.load_versions.outputs.kernel_version }}"
+          if [ "$LATEST_BAZZITE" != "$CURRENT_BAZZITE" ]; then
+            BAZZITE_CHANGED=true
+            echo "✓ Bazzite kernel version changed"
+          fi
 
-          echo "kernel_version=$LATEST_KERNEL" >> "$GITHUB_OUTPUT"
-          echo "Latest kernel version: $LATEST_KERNEL"
-          echo "Current tracked kernel: ${CURRENT_KERNEL:-none}"
+          # Determine which kernel types need building
+          KERNEL_TYPES=""
+          BUILD_CLI=false
+          NEEDS_BUILD=false
 
-          if [ "$LATEST_KERNEL" != "$CURRENT_KERNEL" ]; then
-            echo "is_new=true" >> "$GITHUB_OUTPUT"
-            echo "Kernel version changed"
+          if [ "$YEETMOUSE_CHANGED" = true ]; then
+            # New YeetMouse commit: build for both kernel types
+            KERNEL_TYPES="main,bazzite"
+            BUILD_CLI=true
+            NEEDS_BUILD=true
+            echo "→ Building for both kernel types (new YeetMouse commit)"
           else
-            echo "is_new=false" >> "$GITHUB_OUTPUT"
-            echo "No kernel version change"
+            # Check individual kernel changes
+            if [ "$AURORA_CHANGED" = true ]; then
+              KERNEL_TYPES="main"
+              NEEDS_BUILD=true
+              echo "→ Building for main kernel (Aurora changed)"
+            fi
+
+            if [ "$BAZZITE_CHANGED" = true ]; then
+              if [ -n "$KERNEL_TYPES" ]; then
+                KERNEL_TYPES="$KERNEL_TYPES,bazzite"
+              else
+                KERNEL_TYPES="bazzite"
+              fi
+              NEEDS_BUILD=true
+              echo "→ Building for bazzite kernel (Bazzite changed)"
+            fi
+          fi
+
+          # Set outputs
+          echo "needs_build=$NEEDS_BUILD" >> "$GITHUB_OUTPUT"
+          echo "kernel_types=$KERNEL_TYPES" >> "$GITHUB_OUTPUT"
+          echo "build_cli=$BUILD_CLI" >> "$GITHUB_OUTPUT"
+          echo "yeetmouse_commit=$LATEST_YEETMOUSE" >> "$GITHUB_OUTPUT"
+          echo "aurora_kernel=$LATEST_AURORA" >> "$GITHUB_OUTPUT"
+          echo "bazzite_kernel=$LATEST_BAZZITE" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          if [ "$NEEDS_BUILD" = true ]; then
+            echo "=== Build Required ==="
+            echo "Kernel types: $KERNEL_TYPES"
+            echo "Build CLI: $BUILD_CLI"
+            echo "YeetMouse commit: $LATEST_YEETMOUSE"
+          else
+            echo "→ No changes detected, no build needed"
           fi
 
       - name: Update versions file
-        if: |
-          steps.check_new.outputs.is_new == 'true' ||
-          (steps.config.outputs.enable_kmod == 'true' &&
-           steps.check_kernel.outputs.is_new == 'true')
+        if: steps.check_changes.outputs.needs_build == 'true'
         run: |
-          # Always use latest yeetmouse commit
-          YEETMOUSE_COMMIT="${{ steps.get_commit.outputs.latest_commit }}"
+          YEETMOUSE_COMMIT="${{
+            steps.check_changes.outputs.yeetmouse_commit
+          }}"
+          AURORA_KERNEL_VERSION="${{
+            steps.check_changes.outputs.aurora_kernel
+          }}"
+          BAZZITE_KERNEL_VERSION="${{
+            steps.check_changes.outputs.bazzite_kernel
+          }}"
 
-          # Use new kernel if checked, otherwise keep old value
-          if [ "${{ steps.config.outputs.enable_kmod }}" == "true" ]; then
-            KERNEL_VERSION="${{ steps.check_kernel.outputs.kernel_version }}"
-          else
-            KERNEL_VERSION="${{ steps.load_versions.outputs.kernel_version }}"
-          fi
-
-          # Write complete file
-          {
-            echo "YEETMOUSE_COMMIT=$YEETMOUSE_COMMIT"
-            echo "KERNEL_VERSION=$KERNEL_VERSION"
-          } > .external_versions
-
-          # Smart commit message
-          SHORT_COMMIT="${{ steps.get_commit.outputs.short_commit }}"
-          if [ "${{ steps.check_new.outputs.is_new }}" == "true" ] && \
-             [ "${{ steps.check_kernel.outputs.is_new }}" == "true" ]; then
-            MSG="chore: update yeetmouse to $SHORT_COMMIT"
-            MSG="$MSG and kernel to $KERNEL_VERSION"
-          elif [ "${{ steps.check_new.outputs.is_new }}" == "true" ]; then
-            MSG="chore: update yeetmouse to $SHORT_COMMIT"
-          else
-            MSG="chore: update kernel to $KERNEL_VERSION"
-          fi
+          cat > .external_versions << EOF
+          YEETMOUSE_COMMIT=$YEETMOUSE_COMMIT
+          AURORA_KERNEL_VERSION=$AURORA_KERNEL_VERSION
+          BAZZITE_KERNEL_VERSION=$BAZZITE_KERNEL_VERSION
+          EOF
 
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "github-actions[bot]@users.noreply.github.com"
           git add .external_versions
-          git commit -m "$MSG" && git push
+          COMMIT_MSG="chore: update versions"
+          COMMIT_MSG="$COMMIT_MSG - yeetmouse: $YEETMOUSE_COMMIT"
+          COMMIT_MSG="$COMMIT_MSG, aurora: $AURORA_KERNEL_VERSION"
+          COMMIT_MSG="$COMMIT_MSG, bazzite: $BAZZITE_KERNEL_VERSION"
+          git commit -m "$COMMIT_MSG" && git push
 
       - name: Trigger RPM build workflow
-        if: |
-          steps.check_new.outputs.is_new == 'true' ||
-          (steps.config.outputs.enable_kmod == 'true' &&
-           steps.check_kernel.outputs.is_new == 'true')
+        if: steps.check_changes.outputs.needs_build == 'true'
         run: |
-          # Determine what to build based on what changed
-          YEETMOUSE_NEW="${{ steps.check_new.outputs.is_new }}"
-          KERNEL_NEW="${{ steps.check_kernel.outputs.is_new }}"
-          ENABLE_KMOD="${{ steps.config.outputs.enable_kmod }}"
+          YEETMOUSE_COMMIT="${{ steps.check_changes.outputs.yeetmouse_commit }}"
+          KERNEL_TYPES="${{ steps.check_changes.outputs.kernel_types }}"
+          BUILD_CLI="${{ steps.check_changes.outputs.build_cli }}"
 
-          # If yeetmouse is new, build akmod and cli (and kmod if enabled)
-          # If only kernel is new, build kmod only (if enabled)
-          if [ "$YEETMOUSE_NEW" == "true" ]; then
-            BUILD_AKMOD=true
-            BUILD_CLI=true
-            if [ "$ENABLE_KMOD" == "true" ]; then
-              BUILD_KMOD=true
-            else
-              BUILD_KMOD=false
-            fi
-          elif [ "$KERNEL_NEW" == "true" ] && [ "$ENABLE_KMOD" == "true" ]; then
-            BUILD_AKMOD=false
-            BUILD_CLI=false
-            BUILD_KMOD=true
-          else
-            echo "Nothing to build"
-            exit 0
-          fi
-
-          YEETMOUSE_COMMIT="${{ steps.get_commit.outputs.latest_commit }}"
+          echo "Triggering build with:"
+          echo "  yeetmouse_commit: $YEETMOUSE_COMMIT"
+          echo "  kernel_types: $KERNEL_TYPES"
+          echo "  build_cli: $BUILD_CLI"
 
           gh workflow run build-rpm.yml --ref ${{ github.ref_name }} \
-            -f yeetmouse_commit=$YEETMOUSE_COMMIT \
-            -f update_specs=true \
-            -f build_akmod=$BUILD_AKMOD \
-            -f build_cli=$BUILD_CLI \
-            -f build_kmod=$BUILD_KMOD
+            -f yeetmouse_commit="$YEETMOUSE_COMMIT" \
+            -f kernel_types="$KERNEL_TYPES" \
+            -f build_cli="$BUILD_CLI"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

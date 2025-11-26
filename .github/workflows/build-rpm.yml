@@ -4,45 +4,85 @@ name: Build and Publish RPM Packages
 'on':
   workflow_dispatch:
     inputs:
-      yeetmouse_commit:
-        description: 'YeetMouse commit hash to build (full 40-char hash)'
+      kernel_types:
+        description: >-
+          Kernel types to build (comma-separated: main, bazzite,
+          or main,bazzite)
+        required: false
+        type: string
+        default: 'main'
+      kernel_version:
+        description: 'Specific kernel version (leave empty for latest)'
         required: false
         type: string
         default: ''
-      update_specs:
-        description: 'Update spec files with new version and release'
+      yeetmouse_commit:
+        description: 'YeetMouse commit to build (e.g., 99844bbd786d612657d892cac2f663d940fd3d62)'
         required: false
-        type: boolean
-        default: false
-      force_rebuild:
-        description: 'Force rebuild even if version unchanged'
-        required: false
-        type: boolean
-        default: false
-      build_akmod:
-        description: 'Build akmod package'
-        required: false
-        type: boolean
-        default: true
-      build_cli:
-        description: 'Build CLI package'
-        required: false
-        type: boolean
-        default: true
+        type: string
+        default: ''
       build_kmod:
         description: 'Build kmod package'
         required: false
         type: boolean
-        default: false
+        default: true
+      build_cli:
+        description: >-
+          Build CLI package (only built for main kernel type)
+        required: false
+        type: boolean
+        default: true
       container_image:
-        description: |
-          Container image to use (leave empty to use build.conf default)
-          (e.g., fedora, ghcr.io/ublue-os/aurora-nvidia-open)
+        description: >-
+          Container image for build (leave empty to use build.conf default)
         required: false
         type: string
         default: ''
       fedora_version:
-        description: 'Fedora version to use (leave empty to use build.conf default)'
+        description: >-
+          Fedora version (leave empty to use build.conf default)
+        required: false
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      kernel_types:
+        description: >-
+          Kernel types to build (comma-separated: main, bazzite,
+          or main,bazzite)
+        required: false
+        type: string
+        default: 'main'
+      kernel_version:
+        description: 'Specific kernel version (leave empty for latest)'
+        required: false
+        type: string
+        default: ''
+      yeetmouse_commit:
+        description: 'YeetMouse commit to build (e.g., 99844bbd786d612657d892cac2f663d940fd3d62)'
+        required: false
+        type: string
+        default: ''
+      build_kmod:
+        description: 'Build kmod package'
+        required: false
+        type: boolean
+        default: true
+      build_cli:
+        description: >-
+          Build CLI package (only built for main kernel type)
+        required: false
+        type: boolean
+        default: true
+      container_image:
+        description: >-
+          Container image for build (leave empty to use build.conf default)
+        required: false
+        type: string
+        default: ''
+      fedora_version:
+        description: >-
+          Fedora version (leave empty to use build.conf default)
         required: false
         type: string
         default: ''
@@ -57,7 +97,6 @@ jobs:
     outputs:
       container_image: ${{ steps.config.outputs.container_image }}
       container_version: ${{ steps.config.outputs.container_version }}
-      enable_kmod: ${{ steps.config.outputs.enable_kmod }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -76,463 +115,932 @@ jobs:
 
           echo "container_image=$FINAL_IMAGE" >> $GITHUB_OUTPUT
           echo "container_version=$FINAL_VERSION" >> $GITHUB_OUTPUT
-          echo "enable_kmod=$ENABLE_KMOD" >> $GITHUB_OUTPUT
 
-  update-specs:
+  generate-matrix:
     runs-on: ubuntu-latest
-    if: github.event.inputs.update_specs == 'true'
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      commit: ${{ steps.version.outputs.commit }}
-      short_commit: ${{ steps.version.outputs.short_commit }}
-      commit_sha: ${{ steps.commit.outputs.sha }}
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-
-      - name: Determine yeetmouse commit
-        id: version
+      - name: Generate build matrix
+        id: set-matrix
         run: |
-          # Use workflow input if provided, otherwise read from file
-          INPUT_COMMIT="${{ github.event.inputs.yeetmouse_commit }}"
-          if [ -n "$INPUT_COMMIT" ]; then
-            COMMIT="$INPUT_COMMIT"
-            echo "Using commit from workflow input: $COMMIT"
-          elif [ -f .external_versions ]; then
-            source .external_versions
-            COMMIT="$YEETMOUSE_COMMIT"
-            echo "Using commit from .external_versions: $COMMIT"
-          else
-            echo "ERROR: No commit specified and .external_versions not found"
-            echo "Please provide yeetmouse_commit input or ensure .external_versions exists"
-            exit 1
-          fi
-          
-          # Calculate short commit (first 7 chars)
-          SHORT_COMMIT=$(echo "$COMMIT" | cut -c1-7)
-          
-          echo "commit=$COMMIT" >> $GITHUB_OUTPUT
-          echo "short_commit=$SHORT_COMMIT" >> $GITHUB_OUTPUT
+          KERNEL_TYPES="${{ inputs.kernel_types }}"
 
-      - name: Extract DKMS_VER from commit
-        id: extract_version
-        run: |
-          COMMIT="${{ steps.version.outputs.commit }}"
-          
-          # Download Makefile from the commit
-          curl -sL "https://raw.githubusercontent.com/AndyFilter/YeetMouse/${COMMIT}/Makefile" -o Makefile.tmp
-          
-          # Extract DKMS_VER
-          DKMS_VER=$(grep "^DKMS_VER" Makefile.tmp | cut -d'=' -f2 | xargs)
-          rm Makefile.tmp
-          
-          if [ -z "$DKMS_VER" ]; then
-            echo "ERROR: Failed to extract DKMS_VER from Makefile"
-            exit 1
-          fi
-          
-          echo "version=$DKMS_VER" >> $GITHUB_OUTPUT
-          echo "Extracted DKMS_VER: $DKMS_VER"
+          # Parse comma-separated kernel types
+          IFS=',' read -ra TYPES <<< "$KERNEL_TYPES"
 
-      - name: Update spec files with new version and release
-        run: |
-          set -euo pipefail
-          COMMIT="${{ steps.version.outputs.commit }}"
-          SHORT_COMMIT="${{ steps.version.outputs.short_commit }}"
-          VERSION_NUM="${{ steps.extract_version.outputs.version }}"
-          CHANGELOG_DATE=$(LC_ALL=C date "+%a %b %d %Y")
-          MAINTAINER="github-actions[bot] \
-            <github-actions[bot]@users.noreply.github.com>"
+          # Build JSON matrix
+          MATRIX_JSON='{"include":['
+          FIRST=true
+          CLI_ASSIGNED=false  # Track if we've assigned CLI to a kernel type yet
 
-          for spec in specs/*.spec; do
-            if [ ! -f "$spec" ]; then
-              echo "ERROR: Spec file not found: $spec"
-              exit 1
-            fi
-            if ! grep -q "^Version:" "$spec"; then
-              echo "ERROR: Version field not found in $spec"
-              exit 1
-            fi
-            if ! grep -q "^Release:" "$spec"; then
-              echo "ERROR: Release field not found in $spec"
-              exit 1
-            fi
-            if ! grep -q "^%global commit" "$spec"; then
-              echo "ERROR: %global commit not found in $spec"
-              exit 1
-            fi
+          for TYPE in "${TYPES[@]}"; do
+            # Trim whitespace
+            TYPE=$(echo "$TYPE" | xargs)
 
-            # Extract current values from spec file
-            CURRENT_VERSION=$(grep "^Version:" "$spec" | awk '{print $NF}')
-            CURRENT_RELEASE_RAW=$(grep "^Release:" "$spec" | awk '{print $NF}')
-            # Extract numeric release number, handling RPM macros
-            if [[ "$CURRENT_RELEASE_RAW" =~ ^[0-9]+ ]]; then
-              CURRENT_RELEASE="${BASH_REMATCH[0]}"
+            if [ "$FIRST" = true ]; then
+              FIRST=false
             else
-              # If no numeric prefix, default to 1
-              CURRENT_RELEASE=1
+              MATRIX_JSON="$MATRIX_JSON,"
             fi
-            CURRENT_COMMIT=$(grep "^%global commit" "$spec" | awk '{print $NF}')
 
-            # Determine new release number and changelog message
-            if [ "$CURRENT_VERSION" != "$VERSION_NUM" ]; then
-              # Version changed (DKMS_VER updated), reset release to 1
-              NEW_RELEASE=1
-              CHANGELOG_MSG="- Update to version ${VERSION_NUM} (git commit ${SHORT_COMMIT})"
-            elif [ "$CURRENT_COMMIT" != "$COMMIT" ]; then
-              # Same version, new commit, reset release to 1
-              NEW_RELEASE=1
-              CHANGELOG_MSG="- Update to git commit ${SHORT_COMMIT}"
+            # Assign CLI build to the first kernel type if build_cli is enabled
+            if [ "${{ inputs.build_cli }}" = "true" ] && [ "$CLI_ASSIGNED" = "false" ]; then
+              BUILD_CLI="true"
+              CLI_ASSIGNED=true
             else
-              # Same version and commit, increment release (rebuild)
-              NEW_RELEASE=$((CURRENT_RELEASE + 1))
-              CHANGELOG_MSG="- Rebuild for kernel compatibility"
+              BUILD_CLI="false"
             fi
 
-            # Update %global commit and %global shortcommit
-            sed -i "s/^%global commit.*/%global commit ${COMMIT}/" "$spec"
-            sed -i "s/^%global shortcommit.*/%global shortcommit ${SHORT_COMMIT}/" "$spec"
-
-            # Update Version field
-            sed -i "s/^Version:.*/Version:        ${VERSION_NUM}/" "$spec"
-
-            # Update Release field with git commit hash
-            sed -i "s/^Release:.*/Release:        ${NEW_RELEASE}.git%{shortcommit}%{?dist}/" \
-              "$spec"
-
-            # Insert changelog entry after %changelog line
-            ENTRY="* ${CHANGELOG_DATE} ${MAINTAINER} - "
-            ENTRY="${ENTRY}${VERSION_NUM}-${NEW_RELEASE}.git${SHORT_COMMIT}"
-            ENTRY="${ENTRY}\\n${CHANGELOG_MSG}"
-            sed -i "/^%changelog$/a\\${ENTRY}" "$spec"
+            MATRIX_JSON="$MATRIX_JSON"'{"kernel_type":"'"$TYPE"'",'
+            MATRIX_JSON="$MATRIX_JSON"'"build_cli":"'"$BUILD_CLI"'"}'
           done
 
-      - name: Commit updated spec files
-        id: commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add specs/*.spec
-          VERSION="${{ steps.extract_version.outputs.version }}"
-          SHORT_COMMIT="${{ steps.version.outputs.short_commit }}"
-          git commit -m "chore: update spec files to version ${VERSION} (commit ${SHORT_COMMIT})" && git push
-          
-          # Capture the commit SHA
-          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          MATRIX_JSON="$MATRIX_JSON"']}'
 
-  build-rpm:
-    needs: [load-config, update-specs]
-    if: always() && needs.load-config.result == 'success'
+          echo "Generated matrix: $MATRIX_JSON"
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+
+  resolve-versions:
+    needs: generate-matrix
     runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.load-config.outputs.container_image }}:${{ needs.load-config.outputs.container_version }}
+    strategy:
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     outputs:
-      container_image: ${{ needs.load-config.outputs.container_image }}
-      container_version: ${{ needs.load-config.outputs.container_version }}
-      kernel_version: ${{ steps.build_info.outputs.kernel_version }}
-      version: ${{ steps.get_version.outputs.version }}
-      short_commit: ${{ steps.get_version.outputs.short_commit }}
+      yeetmouse_commit: ${{ steps.yeetmouse.outputs.yeetmouse_commit }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.update-specs.outputs.commit_sha || github.ref_name }}
 
-      - name: Get version from spec
-        id: get_version
+      - name: Install dependencies
         run: |
-          VERSION=$(grep "^Version:" specs/akmod-yeetmouse.spec | awk '{print $NF}')
-          SHORT_COMMIT=$(grep "^%global shortcommit" specs/akmod-yeetmouse.spec | awk '{print $NF}')
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "short_commit=${SHORT_COMMIT}" >> $GITHUB_OUTPUT
-          echo "Detected version from spec: ${VERSION}"
-          echo "Detected short commit from spec: ${SHORT_COMMIT}"
+          sudo apt-get update
+          sudo apt-get install -y skopeo jq
 
-      - name: Detect kernel version
-        id: build_info
+      - name: Determine yeetmouse commit
+        id: yeetmouse
         run: |
           set -euo pipefail
+          echo "::group::Determining yeetmouse commit"
 
-          # Capture kernel version from container (not host)
-          KERNEL_VERSION=$(rpm -q kernel-devel \
-            --queryformat '%{VERSION}-%{RELEASE}\n' | head -1)
-
-          if [ -z "$KERNEL_VERSION" ]; then
-            echo "ERROR: Failed to extract kernel version"
+          # Use workflow input if provided, otherwise read from file
+          INPUT_COMMIT="${{ inputs.yeetmouse_commit }}"
+          if [ -n "$INPUT_COMMIT" ]; then
+            echo "yeetmouse_commit=$INPUT_COMMIT" >> $GITHUB_OUTPUT
+            echo "Using yeetmouse commit from workflow input: $INPUT_COMMIT"
+          elif [ -f .external_versions ]; then
+            source .external_versions
+            if [ -z "${YEETMOUSE_COMMIT:-}" ]; then
+              echo "::endgroup::"
+              echo "::error::YEETMOUSE_COMMIT not set in .external_versions"
+              exit 1
+            fi
+            echo "yeetmouse_commit=$YEETMOUSE_COMMIT" >> $GITHUB_OUTPUT
+            echo "Using yeetmouse commit from .external_versions: $YEETMOUSE_COMMIT"
+          else
+            echo "::endgroup::"
+            echo "::error::No yeetmouse commit specified"
+            echo "::error::.external_versions file not found"
+            echo "::error::Provide yeetmouse_commit input or ensure"
+            echo "::error::.external_versions exists"
             exit 1
           fi
 
-          echo "kernel_version=${KERNEL_VERSION}" >> $GITHUB_OUTPUT
-          echo "Detected kernel version: ${KERNEL_VERSION}"
+          echo "::endgroup::"
+
+      - name: Resolve kernel version
+        id: resolve
+        run: |
+          set -euo pipefail
+          KERNEL_TYPE="${{ matrix.kernel_type }}"
+          EXPLICIT_VERSION="${{ inputs.kernel_version }}"
+
+          echo "::group::Resolving kernel version for $KERNEL_TYPE"
+
+          # Make script executable
+          chmod +x scripts/resolve-kernel-version.sh
+
+          # Resolve kernel version with error handling
+          if [ -n "$EXPLICIT_VERSION" ]; then
+            if ! KERNEL_VERSION=$(./scripts/resolve-kernel-version.sh \
+              --kernel-type "$KERNEL_TYPE" \
+              --version "$EXPLICIT_VERSION"); then
+              echo "::endgroup::"
+              echo "::error::Failed to resolve kernel version"
+              echo "::error::Kernel type: $KERNEL_TYPE"
+              echo "::error::Explicit version: $EXPLICIT_VERSION"
+              exit 1
+            fi
+          else
+            if ! KERNEL_VERSION=$(./scripts/resolve-kernel-version.sh \
+              --kernel-type "$KERNEL_TYPE"); then
+              echo "::endgroup::"
+              echo "::error::Failed to resolve kernel version"
+              echo "::error::Kernel type: $KERNEL_TYPE"
+              exit 1
+            fi
+          fi
+
+          # Validate we got a version
+          if [ -z "$KERNEL_VERSION" ]; then
+            echo "::endgroup::"
+            echo "::error::Kernel version resolution returned empty result"
+            exit 1
+          fi
+
+          echo "kernel_version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
+          echo "✓ Resolved kernel version: $KERNEL_VERSION"
+
+          # Store in file for build-rpm job to access
+          mkdir -p /tmp/versions
+          echo "$KERNEL_VERSION" > "/tmp/versions/${KERNEL_TYPE}_kernel_version"
+
+          echo "::endgroup::"
+
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-${{ matrix.kernel_type }}
+          path: /tmp/versions/${{ matrix.kernel_type }}_kernel_version
+
+  build-rpm:
+    needs: [load-config, generate-matrix, resolve-versions]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+      fail-fast: false
+    container:
+      image: >-
+        ${{ needs.load-config.outputs.container_image }}:${{
+        needs.load-config.outputs.container_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download version info
+        uses: actions/download-artifact@v4
+        with:
+          name: version-${{ matrix.kernel_type }}
+          path: /tmp/versions
+
+      - name: Load kernel version
+        id: load_version
+        run: |
+          KERNEL_TYPE="${{ matrix.kernel_type }}"
+          KERNEL_VERSION=$(cat "/tmp/versions/${KERNEL_TYPE}_kernel_version")
+          echo "kernel_version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
+          echo "Loaded kernel version for $KERNEL_TYPE: $KERNEL_VERSION"
+
+      - name: Load yeetmouse commit
+        id: load_yeetmouse
+        run: |
+          # Use yeetmouse commit from resolve-versions job output
+          YEETMOUSE_COMMIT="${{ needs.resolve-versions.outputs.yeetmouse_commit }}"
+          echo "yeetmouse_commit=$YEETMOUSE_COMMIT" >> $GITHUB_OUTPUT
+          echo "Using yeetmouse commit from resolve-versions: $YEETMOUSE_COMMIT"
 
       - name: Install build dependencies
         run: |
-          # Step 1: Install base RPM build tools
+          # Step 1: Install base RPM build tools and git
           dnf install -y rpm-build rpmdevtools rpmlint createrepo_c \
-            rpm-sign gnupg2 pinentry spectool
+            rpm-sign gnupg2 pinentry spectool kmodtool curl jq git
 
           # Step 2: Install BuildRequires from spec files
-          dnf builddep -y specs/*.spec
+          KERNEL_VERSION="${{ steps.load_version.outputs.kernel_version }}"
+          YEETMOUSE_COMMIT="${{ steps.load_yeetmouse.outputs.yeetmouse_commit }}"
+          
+          for spec in specs/*.spec; do
+            if [[ "$spec" == *"kmod"* ]]; then
+              # Provide actual kernel_version for kmod spec parsing
+              dnf builddep -y --define "kernel_version ${KERNEL_VERSION}" \
+                --define "commit ${YEETMOUSE_COMMIT}" \
+                --define "shortcommit ${YEETMOUSE_COMMIT:0:7}" \
+                --define "release 1" "$spec"
+            else
+              dnf builddep -y "$spec"
+            fi
+          done
 
       - name: Setup RPM build tree
         run: rpmdev-setuptree
 
-      - name: Download YeetMouse source
+      - name: Fetch kernel-devel packages
+        if: inputs.build_kmod == true
         run: |
+          set -euo pipefail
+          KERNEL_VERSION="${{ steps.load_version.outputs.kernel_version }}"
+          KERNEL_TYPE="${{ matrix.kernel_type }}"
+          FEDORA_VERSION="${{ needs.load-config.outputs.container_version }}"
+
+          # Make script executable
+          chmod +x scripts/fetch-kernel-packages.sh
+
+          # Fetch kernel packages with error handling
+          echo "::group::Fetching kernel-devel packages"
+          if ! ./scripts/fetch-kernel-packages.sh \
+            --kernel-version "$KERNEL_VERSION" \
+            --kernel-type "$KERNEL_TYPE" \
+            --fedora-version "$FEDORA_VERSION" \
+            --output-dir ~/kernel-packages; then
+            echo "::endgroup::"
+            echo "::error::Failed to fetch kernel-devel packages"
+            echo "::error::Kernel version: $KERNEL_VERSION"
+            echo "::error::Kernel type: $KERNEL_TYPE"
+            echo "::error::Kernel version not available in repository"
+            echo "::error::For main kernel: Check"
+            echo "::error::https://kojipkgs.fedoraproject.org/packages/kernel/"
+            echo "::error::For bazzite kernel: Check"
+            echo "::error::github.com/bazzite-org/kernel-bazzite/releases"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: Verify kernel-devel availability
+        if: inputs.build_kmod == true
+        run: |
+          set -euo pipefail
+          echo "::group::Verifying kernel-devel packages"
+
+          # Check that packages were downloaded
+          if ! ls ~/kernel-packages/kernel-devel*.rpm 1>/dev/null 2>&1; then
+            echo "::error::No kernel-devel packages found in ~/kernel-packages/"
+            echo "::error::Package fetch may have failed silently"
+            exit 1
+          fi
+
+          # Verify packages are not empty
+          for pkg in ~/kernel-packages/kernel-devel*.rpm; do
+            if [ ! -s "$pkg" ]; then
+              echo "::error::Package file is empty: $pkg"
+              exit 1
+            fi
+            echo "✓ Found: $(basename "$pkg") ($(stat -c%s "$pkg") bytes)"
+          done
+
+          echo "::endgroup::"
+
+      - name: Install kernel-devel
+        if: inputs.build_kmod == true
+        run: |
+          set -euo pipefail
+          echo "::group::Installing kernel-devel packages"
+
+          KERNEL_TYPE="${{ matrix.kernel_type }}"
+          KERNEL_VERSION="${{ steps.load_version.outputs.kernel_version }}"
+
+          # For Bazzite kernels, only install kernel-devel (not kernel-devel-matched)
+          # kernel-devel-matched requires kernel-core which isn't available for Bazzite
+          if [[ "$KERNEL_TYPE" == "bazzite" ]]; then
+            echo "Installing kernel-devel only (Bazzite kernel)..."
+            if ! dnf install -y ~/kernel-packages/kernel-devel-${KERNEL_VERSION}.rpm; then
+              echo "::endgroup::"
+              echo "::error::Failed to install kernel-devel package"
+              exit 1
+            fi
+          else
+            echo "Installing all kernel-devel packages (main kernel)..."
+            if ! dnf install -y ~/kernel-packages/kernel-devel*.rpm; then
+              echo "::endgroup::"
+              echo "::error::Failed to install kernel-devel packages"
+              echo "::error::Package corruption or dependency issues"
+              exit 1
+            fi
+          fi
+
+          # Verify installation
+          if ! rpm -q "kernel-devel-${KERNEL_VERSION}"; then
+            echo "::endgroup::"
+            echo "::error::kernel-devel package not found after installation"
+            echo "::error::Expected: kernel-devel-${KERNEL_VERSION}"
+            exit 1
+          fi
+
+          echo "✓ Successfully installed kernel-devel-${KERNEL_VERSION}"
+          echo "::endgroup::"
+
+      - name: Determine release number
+        id: release
+        run: |
+          set -euo pipefail
+          YEETMOUSE_COMMIT="${{ steps.load_yeetmouse.outputs.yeetmouse_commit }}"
+          KERNEL_VERSION="${{ steps.load_version.outputs.kernel_version }}"
+          KERNEL_TYPE="${{ matrix.kernel_type }}"
+
+          echo "::group::Determining release number"
+
+          # Make script executable
+          chmod +x scripts/determine-release-number.sh
+
+          # Determine release number with error handling
+          if ! RELEASE_NUMBER=$(./scripts/determine-release-number.sh \
+            --yeetmouse-commit "$YEETMOUSE_COMMIT" \
+            --kernel-version "$KERNEL_VERSION" \
+            --kernel-type "$KERNEL_TYPE" \
+            --repo "${{ github.repository }}"); then
+            echo "::endgroup::"
+            echo "::error::Failed to determine release number"
+            echo "::error::YeetMouse commit: $YEETMOUSE_COMMIT"
+            echo "::error::Kernel version: $KERNEL_VERSION"
+            echo "::error::Kernel type: $KERNEL_TYPE"
+            exit 1
+          fi
+
+          # Validate release number is a positive integer
+          if ! [[ "$RELEASE_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::endgroup::"
+            echo "::error::Invalid release number: $RELEASE_NUMBER"
+            echo "::error::Expected a positive integer"
+            exit 1
+          fi
+
+          echo "release_number=$RELEASE_NUMBER" >> $GITHUB_OUTPUT
+          echo "✓ Determined release number: $RELEASE_NUMBER"
+          echo "::endgroup::"
+
+      - name: Determine CLI release number
+        id: cli-release
+        if: inputs.build_cli == true && matrix.build_cli == 'true'
+        run: |
+          set -euo pipefail
+          YEETMOUSE_COMMIT="${{ steps.load_yeetmouse.outputs.yeetmouse_commit }}"
+
+          echo "::group::Determining CLI release number"
+
+          # Make script executable
+          chmod +x scripts/determine-cli-release-number.sh
+
+          # Determine CLI release number with error handling
+          if ! CLI_RELEASE_NUMBER=$(./scripts/determine-cli-release-number.sh \
+            --yeetmouse-commit "$YEETMOUSE_COMMIT" \
+            --repo "${{ github.repository }}"); then
+            echo "::endgroup::"
+            echo "::error::Failed to determine CLI release number"
+            echo "::error::YeetMouse commit: $YEETMOUSE_COMMIT"
+            exit 1
+          fi
+
+          # Validate release number is a positive integer
+          if ! [[ "$CLI_RELEASE_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::endgroup::"
+            echo "::error::Invalid CLI release number: $CLI_RELEASE_NUMBER"
+            echo "::error::Expected a positive integer"
+            exit 1
+          fi
+
+          echo "cli_release_number=$CLI_RELEASE_NUMBER" >> $GITHUB_OUTPUT
+          echo "✓ Determined CLI release number: $CLI_RELEASE_NUMBER"
+          echo "::endgroup::"
+
+      - name: Download yeetmouse source
+        run: |
+          KERNEL_VERSION="${{ steps.load_version.outputs.kernel_version }}"
+          YEETMOUSE_COMMIT="${{ steps.load_yeetmouse.outputs.yeetmouse_commit }}"
+          
           for spec in specs/*.spec; do
-            spectool -g -R "$spec"
+            if [[ "$spec" == *"kmod"* ]]; then
+              # Provide kernel_version for kmod spec parsing
+              spectool -g -R --define "kernel_version ${KERNEL_VERSION}" \
+                --define "commit ${YEETMOUSE_COMMIT}" \
+                --define "shortcommit ${YEETMOUSE_COMMIT:0:7}" "$spec"
+            else
+              spectool -g -R --define "commit ${YEETMOUSE_COMMIT}" \
+                --define "shortcommit ${YEETMOUSE_COMMIT:0:7}" "$spec"
+            fi
           done
 
       - name: Copy spec files
         run: |
           cp specs/*.spec ~/rpmbuild/SPECS/
 
-      - name: Build akmod-yeetmouse
-        if: github.event.inputs.build_akmod == 'true'
-        run: |
-          cd ~/rpmbuild/SPECS
-          rpmbuild -ba akmod-yeetmouse.spec
-
-      - name: Build yeetmouse-gui
-        if: github.event.inputs.build_cli == 'true'
-        run: |
-          cd ~/rpmbuild/SPECS
-          rpmbuild -ba yeetmouse-gui.spec
-
       - name: Build kmod-yeetmouse
-        if: |
-          github.event.inputs.build_kmod == 'true' &&
-          needs.load-config.outputs.enable_kmod == 'true'
+        if: inputs.build_kmod == true
         run: |
+          set -euo pipefail
           cd ~/rpmbuild/SPECS
-          rpmbuild -ba kmod-yeetmouse.spec
 
-          # Get kernel version from build info
-          KVER="${{ steps.build_info.outputs.kernel_version }}"
+          KERNEL_VERSION="${{ steps.load_version.outputs.kernel_version }}"
+          YEETMOUSE_COMMIT="${{ steps.load_yeetmouse.outputs.yeetmouse_commit }}"
+          RELEASE_NUMBER="${{ steps.release.outputs.release_number }}"
+          SHORTCOMMIT="${YEETMOUSE_COMMIT:0:7}"
 
-          # Rename kmod package to include kernel version
-          cd ~/rpmbuild/RPMS/x86_64
-          for rpm in kmod-yeetmouse-*.rpm; do
-            if [[ "$rpm" != *"+"* ]]; then
-              # Extract version and release from filename
-              # kmod-yeetmouse-0.9.2-1.fc41.x86_64.rpm ->
-              # kmod-yeetmouse-0.9.2-1+6.12.1.fc41.x86_64.rpm
-              NEW_NAME=$(echo "$rpm" | \
-                sed "s/\.fc[0-9]*\.x86_64\.rpm/+${KVER}.x86_64.rpm/")
-              mv "$rpm" "$NEW_NAME"
-            fi
-          done
+          echo "::group::Building kmod-yeetmouse for ${{ matrix.kernel_type }}"
+          echo "  Kernel version: $KERNEL_VERSION"
+          echo "  YeetMouse commit: $YEETMOUSE_COMMIT"
+          echo "  Release number: $RELEASE_NUMBER"
+
+          # Build with log capture
+          BUILD_LOG="/tmp/kmod-build.log"
+          if ! rpmbuild --define "kernel_version ${KERNEL_VERSION}" \
+                   --define "commit ${YEETMOUSE_COMMIT}" \
+                   --define "shortcommit ${SHORTCOMMIT}" \
+                   --define "release ${RELEASE_NUMBER}" \
+                   -ba kmod-yeetmouse.spec 2>&1 | tee "$BUILD_LOG"; then
+            echo "::endgroup::"
+            echo "::error::kmod-yeetmouse build failed"
+            echo "::group::Build log (last 50 lines)"
+            tail -n 50 "$BUILD_LOG"
+            echo "::endgroup::"
+            echo "::error::Check the build log above for compilation errors"
+            exit 1
+          fi
+
+          # Verify build output
+          if ! ls ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm \
+              1>/dev/null 2>&1; then
+            echo "::endgroup::"
+            echo "::error::Build completed but no kmod package found"
+            echo "::error::Expected package in ~/rpmbuild/RPMS/x86_64/"
+            exit 1
+          fi
+
+          echo "✓ Successfully built kmod-yeetmouse"
+          ls -lh ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm
+          echo "::endgroup::"
+
+      - name: Build yeetmouse CLI
+        if: inputs.build_cli == true && matrix.build_cli == 'true'
+        run: |
+          set -euo pipefail
+          cd ~/rpmbuild/SPECS
+
+          YEETMOUSE_COMMIT="${{ steps.load_yeetmouse.outputs.yeetmouse_commit }}"
+          CLI_RELEASE_NUMBER="${{ steps.cli-release.outputs.cli_release_number }}"
+          SHORTCOMMIT="${YEETMOUSE_COMMIT:0:7}"
+
+          echo "::group::Building yeetmouse CLI"
+          echo "  YeetMouse commit: $YEETMOUSE_COMMIT"
+          echo "  CLI release number: $CLI_RELEASE_NUMBER"
+
+          # Build with log capture
+          BUILD_LOG="/tmp/cli-build.log"
+          if ! rpmbuild --define "commit ${YEETMOUSE_COMMIT}" \
+                   --define "shortcommit ${SHORTCOMMIT}" \
+                   --define "release ${CLI_RELEASE_NUMBER}" \
+                   -ba yeetmouse.spec 2>&1 | tee "$BUILD_LOG"; then
+            echo "::endgroup::"
+            echo "::error::yeetmouse CLI build failed"
+            echo "::group::Build log (last 50 lines)"
+            tail -n 50 "$BUILD_LOG"
+            echo "::endgroup::"
+            echo "::error::Check the build log above for compilation errors"
+            exit 1
+          fi
+
+          # Verify build output
+          if ! ls ~/rpmbuild/RPMS/x86_64/yeetmouse-*.rpm 1>/dev/null 2>&1; then
+            echo "::endgroup::"
+            echo "::error::Build completed but no CLI package found"
+            echo "::error::Expected package in ~/rpmbuild/RPMS/x86_64/"
+            exit 1
+          fi
+
+          echo "✓ Successfully built yeetmouse CLI"
+          ls -lh ~/rpmbuild/RPMS/x86_64/yeetmouse-*.rpm
+          echo "::endgroup::"
 
       - name: Lint packages
         run: |
           rpmlint ~/rpmbuild/RPMS/x86_64/*.rpm || true
         continue-on-error: true
 
-      - name: Setup GPG for signing
-        run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 -d > private.key
-          gpg --batch --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-            --import private.key
-          echo -e "5\ny\n" | gpg --batch --command-fd 0 \
-            --edit-key "${{ secrets.GPG_KEY_ID }}" trust
-          rm private.key
-
-      - name: Sign RPM packages
-        run: |
-          echo "%_gpg_name ${{ secrets.GPG_KEY_ID }}" > ~/.rpmmacros
-          echo "%__gpg /usr/bin/gpg" >> ~/.rpmmacros
-          echo "%_gpg_sign_cmd_extra_args --batch --no-tty --yes \
-            --pinentry-mode loopback --passphrase \
-            '${{ secrets.GPG_PASSPHRASE }}'" >> ~/.rpmmacros
-          cd ~/rpmbuild/RPMS/x86_64
-          rpm --addsign *.rpm
-
       - name: Prepare release packages
         run: |
           set -euo pipefail
+          echo "::group::Preparing release packages"
           mkdir -p release-packages
 
-          # Copy akmod packages if built
-          if [ "${{ github.event.inputs.build_akmod }}" == "true" ]; then
-            if ls ~/rpmbuild/RPMS/x86_64/akmod-yeetmouse-*.rpm \
-                1>/dev/null 2>&1; then
-              cp ~/rpmbuild/RPMS/x86_64/akmod-yeetmouse-*.rpm \
-                release-packages/
-            else
-              echo "ERROR: akmod package build requested but not found"
-              exit 1
-            fi
-          fi
-
-          # Copy GUI packages if built
-          if [ "${{ github.event.inputs.build_cli }}" == "true" ]; then
-            if ls ~/rpmbuild/RPMS/x86_64/yeetmouse-gui-*.rpm 1>/dev/null 2>&1; then
-              cp ~/rpmbuild/RPMS/x86_64/yeetmouse-gui-*.rpm release-packages/
-            else
-              echo "ERROR: GUI package build requested but not found"
-              exit 1
-            fi
-          fi
-
           # Copy kmod packages if built
-          if [ "${{ github.event.inputs.build_kmod }}" == "true" ]; then
+          if [ "${{ inputs.build_kmod }}" == "true" ]; then
             if ls ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm \
                 1>/dev/null 2>&1; then
               cp ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm \
                 release-packages/
+              echo "✓ Copied kmod packages"
             else
-              echo "ERROR: kmod package build requested but not found"
+              echo "::endgroup::"
+              echo "::error::kmod package build requested but not found"
+              echo "::error::Expected packages in ~/rpmbuild/RPMS/x86_64/"
+              ls -la ~/rpmbuild/RPMS/x86_64/ || true
               exit 1
             fi
           fi
 
-          # Exclude akmod-akmod-yeetmouse and kmod-akmod-yeetmouse (stubs)
-          rm -f release-packages/akmod-akmod-yeetmouse-*.rpm
-          rm -f release-packages/kmod-akmod-yeetmouse-*.rpm
+          # Copy CLI packages if built (only for main kernel type)
+          if [ "${{ inputs.build_cli }}" == "true" ] && \
+             [ "${{ matrix.build_cli }}" == "true" ]; then
+            if ls ~/rpmbuild/RPMS/x86_64/yeetmouse-*.rpm 1>/dev/null 2>&1; then
+              cp ~/rpmbuild/RPMS/x86_64/yeetmouse-*.rpm release-packages/
+              echo "✓ Copied CLI packages"
+            else
+              echo "::endgroup::"
+              echo "::error::CLI package build requested but not found"
+              echo "::error::Expected packages in ~/rpmbuild/RPMS/x86_64/"
+              ls -la ~/rpmbuild/RPMS/x86_64/ || true
+              exit 1
+            fi
+          fi
 
           # Copy source RPMs if any packages were built
           if ls ~/rpmbuild/SRPMS/*.src.rpm 1>/dev/null 2>&1; then
             cp ~/rpmbuild/SRPMS/*.src.rpm release-packages/
+            echo "✓ Copied source RPMs"
           fi
+
+          # Verify we have at least one package
+          if ! ls release-packages/*.rpm 1>/dev/null 2>&1; then
+            echo "::endgroup::"
+            echo "::error::No packages found to release"
+            echo "::error::At least one package should have been built"
+            exit 1
+          fi
+
+          echo "Release packages prepared:"
+          ls -lh release-packages/
+          echo "::endgroup::"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: rpm-packages
-          path: |
-            release-packages/
-            repo/
+          name: rpm-packages-${{ matrix.kernel_type }}
+          path: release-packages/
 
   publish:
-    needs: build-rpm
+    needs: [build-rpm, resolve-versions, load-config]
     runs-on: ubuntu-latest
+    container:
+      image: >-
+        ${{ needs.load-config.outputs.container_image }}:${{
+        needs.load-config.outputs.container_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: rpm-packages
           path: artifacts/
+          pattern: rpm-packages-*
+          merge-multiple: true
 
-      - name: Get container build tag
-        id: container_info
+      - name: Verify downloaded packages
         run: |
-          CONTAINER_IMAGE="${{ needs.build-rpm.outputs.container_image }}"
-          CONTAINER_VERSION="${{ needs.build-rpm.outputs.container_version }}"
-          IMAGE_FULL="${CONTAINER_IMAGE}:${CONTAINER_VERSION}"
+          set -euo pipefail
+          echo "::group::Verifying downloaded packages"
 
-          # Pull image to ensure we have it locally
-          docker pull "${IMAGE_FULL}"
-
-          # Extract build tag from image labels
-          BUILD_TAG=$(docker inspect \
-            --format='{{index .Config.Labels "org.opencontainers.image.version"}}' \
-            "${IMAGE_FULL}")
-
-          if [ -z "$BUILD_TAG" ]; then
-            echo "WARNING: Failed to extract build tag, using container version"
-            BUILD_TAG="${CONTAINER_VERSION}"
+          # Check that artifacts directory exists and has packages
+          if [ ! -d "artifacts" ]; then
+            echo "::error::Artifacts directory not found"
+            exit 1
           fi
 
-          echo "build_tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
-          echo "Container build tag: ${BUILD_TAG}"
+          if ! ls artifacts/*.rpm 1>/dev/null 2>&1; then
+            echo "::error::No RPM packages found in artifacts"
+            echo "::error::Build jobs may have failed to produce packages"
+            exit 1
+          fi
+
+          echo "Downloaded packages:"
+          ls -lh artifacts/
+
+          # Verify each package is not empty
+          for pkg in artifacts/*.rpm; do
+            if [ ! -s "$pkg" ]; then
+              echo "::error::Package file is empty: $pkg"
+              exit 1
+            fi
+          done
+
+          echo "✓ All packages verified"
+          echo "::endgroup::"
+
+      - name: Install RPM signing tools
+        run: |
+          dnf install -y rpm-sign gnupg2 createrepo_c rpmsign
+
+      - name: Setup GPG for signing
+        run: |
+          set -euo pipefail
+          echo "::group::Setting up GPG for signing"
+
+          # Decode and import private key
+          if ! echo "${{ secrets.GPG_PRIVATE_KEY }}" | \
+              base64 -d > private.key; then
+            echo "::endgroup::"
+            echo "::error::Failed to decode GPG_PRIVATE_KEY"
+            echo "::error::Ensure the secret is properly base64 encoded"
+            exit 1
+          fi
+
+          if ! gpg --batch --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
+            --import private.key 2>&1; then
+            rm -f private.key
+            echo "::endgroup::"
+            echo "::error::Failed to import GPG private key"
+            echo "::error::Check that GPG_PASSPHRASE is correct"
+            exit 1
+          fi
+
+          # Set trust level
+          if ! echo -e "5\ny\n" | gpg --batch --command-fd 0 \
+            --edit-key "${{ secrets.GPG_KEY_ID }}" trust 2>&1; then
+            rm -f private.key
+            echo "::endgroup::"
+            echo "::error::Failed to set trust level for GPG key"
+            exit 1
+          fi
+
+          rm -f private.key
+          echo "✓ GPG configured successfully"
+          echo "::endgroup::"
+
+      - name: Sign all RPM packages
+        run: |
+          set -euo pipefail
+          echo "::group::Signing RPM packages"
+
+          # Import public key into RPM database
+          gpg --export -a "${{ secrets.GPG_KEY_ID }}" > /tmp/gpg-pubkey.asc
+          rpm --import /tmp/gpg-pubkey.asc
+          
+          # Verify key is in RPM database
+          echo "Keys in RPM database:"
+          rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\t%{SUMMARY}\n'
+
+          # Create GPG wrapper script that handles passphrase
+          cat > /tmp/gpg-sign-wrapper.sh << 'WRAPPER_EOF'
+          #!/bin/bash
+          # GPG wrapper for RPM signing - reads passphrase from environment
+          echo "$GPG_PASSPHRASE" | /usr/bin/gpg \
+            --batch \
+            --pinentry-mode loopback \
+            --passphrase-fd 0 \
+            "$@"
+          WRAPPER_EOF
+          chmod +x /tmp/gpg-sign-wrapper.sh
+
+          # Test the wrapper script works
+          echo "Testing GPG wrapper..."
+          export GPG_PASSPHRASE="${{ secrets.GPG_PASSPHRASE }}"
+          if ! echo "test" | /tmp/gpg-sign-wrapper.sh --clearsign -u "${{ secrets.GPG_KEY_ID }}" > /dev/null 2>&1; then
+            echo "::error::GPG wrapper test failed - passphrase or key issue"
+            exit 1
+          fi
+          echo "✓ GPG wrapper test passed"
+
+          # List available secret keys with full details
+          echo "Available GPG secret keys:"
+          gpg --list-secret-keys --keyid-format LONG --with-subkey-fingerprints
+          
+          # Check key capabilities
+          echo ""
+          echo "Key capabilities check:"
+          gpg --list-keys --with-colons "${{ secrets.GPG_KEY_ID }}" | grep -E "^(pub|sub):" | while IFS=: read -r type trust keylen algo keyid date expires dummy uid_hash dummy2 caps rest; do
+            echo "  Type: $type, KeyID: $keyid, Capabilities: $caps"
+          done
+          
+          # Test actual detached signature creation (what RPM uses)
+          echo ""
+          echo "Testing detached signature creation (RPM-style)..."
+          echo "test data" > /tmp/test.txt
+          if /tmp/gpg-sign-wrapper.sh --detach-sign -u "${{ secrets.GPG_KEY_ID }}" --armor /tmp/test.txt 2>&1; then
+            echo "✓ Detached signature created successfully"
+            ls -la /tmp/test.txt.asc
+            # Verify the signature
+            if gpg --verify /tmp/test.txt.asc /tmp/test.txt 2>&1; then
+              echo "✓ Signature verification successful"
+            else
+              echo "::error::Signature verification FAILED"
+            fi
+          else
+            echo "::error::Failed to create detached signature"
+          fi
+
+          # Configure GPG to use SHA256 for digests
+          cat > ~/.gnupg/gpg.conf << 'GPG_CONF'
+          personal-digest-preferences SHA256
+          cert-digest-algo SHA256
+          default-preference-list SHA512 SHA384 SHA256 SHA224 AES256 AES192 AES CAST5 ZLIB BZIP2 ZIP Uncompressed
+          GPG_CONF
+
+          # Configure RPM to use wrapper script with SHA256
+          cat > ~/.rpmmacros << 'EOF'
+          %_signature gpg
+          %_gpg_name ${{ secrets.GPG_KEY_ID }}
+          %__gpg /tmp/gpg-sign-wrapper.sh
+          %_gpg_digest_algo sha256
+          EOF
+
+          echo "RPM macros configured:"
+          cat ~/.rpmmacros
+
+          # Create passphrase file for GPG
+          echo "$GPG_PASSPHRASE" > /tmp/gpg-passphrase
+          chmod 600 /tmp/gpg-passphrase
+          
+          # Update wrapper to use passphrase file
+          cat > /tmp/gpg-sign-wrapper.sh << 'WRAPPER_EOF'
+          #!/bin/bash
+          /usr/bin/gpg \
+            --batch \
+            --pinentry-mode loopback \
+            --passphrase-file /tmp/gpg-passphrase \
+            "$@"
+          WRAPPER_EOF
+          chmod +x /tmp/gpg-sign-wrapper.sh
+          
+          # Test signing with the updated wrapper
+          echo "Testing signing with passphrase file..."
+          if ! echo "test" | /tmp/gpg-sign-wrapper.sh --clearsign -u "${{ secrets.GPG_KEY_ID }}" > /dev/null 2>&1; then
+            echo "::error::GPG signing test failed"
+            exit 1
+          fi
+          echo "✓ GPG signing test passed"
+
+          # Sign all RPM packages with verbose output
+          cd artifacts
+          SIGN_FAILED=0
+          for rpm in *.rpm; do
+            if [ -f "$rpm" ]; then
+              echo "Signing $rpm"
+              echo "Running: rpm --addsign --define '_gpg_name ${{ secrets.GPG_KEY_ID }}' --define '__gpg /tmp/gpg-sign-wrapper.sh' $rpm"
+              if ! rpm --addsign --define "_gpg_name ${{ secrets.GPG_KEY_ID }}" --define "__gpg /tmp/gpg-sign-wrapper.sh" "$rpm" 2>&1; then
+                echo "::error::Failed to sign package: $rpm"
+                SIGN_FAILED=1
+              fi
+              
+              # Verify signature immediately after signing
+              echo "Checking signature on $rpm..."
+              rpm --checksig -v "$rpm" 2>&1 || true
+              
+              # Check if GPG signature exists
+              echo "Checking for GPG signature..."
+              rpm -qp --qf '%{SIGPGP:pgpsig}\n' "$rpm" 2>&1 || echo "No GPG signature found"
+            fi
+          done
+
+          if [ $SIGN_FAILED -eq 1 ]; then
+            echo "::endgroup::"
+            echo "::error::One or more packages failed to sign"
+            exit 1
+          fi
+
+          echo "✓ All packages signed successfully"
+          echo "::endgroup::"
+
+      - name: Verify package signatures
+        run: |
+          set -euo pipefail
+          echo "::group::Verifying package signatures"
+
+          cd artifacts
+          VERIFY_FAILED=0
+          for rpm in *.rpm; do
+            if [ -f "$rpm" ]; then
+              echo "Verifying signature for $rpm"
+              if ! rpm --checksig -v "$rpm" 2>&1 | grep -qi "OpenPGP.*OK"; then
+                echo "::error::Signature verification failed for: $rpm"
+                rpm --checksig -v "$rpm" || true
+                VERIFY_FAILED=1
+              else
+                echo "✓ Signature valid for $rpm"
+              fi
+            fi
+          done
+
+          if [ $VERIFY_FAILED -eq 1 ]; then
+            echo "::endgroup::"
+            echo "::error::One or more packages have invalid signatures"
+            echo "::error::Refusing to publish unsigned/invalid packages"
+            exit 1
+          fi
+
+          echo "✓ All package signatures verified"
+          echo "::endgroup::"
 
       - name: Prepare release notes
         id: release_notes
         run: |
-          source build.conf
-
-          VER="${{ needs.build-rpm.outputs.version }}"
-          SHORT_COMMIT="${{ needs.build-rpm.outputs.short_commit }}"
-          IMG="${{ needs.build-rpm.outputs.container_image }}"
-          BUILD_TAG="${{ steps.container_info.outputs.build_tag }}"
-          KVER="${{ needs.build-rpm.outputs.kernel_version }}"
+          COMMIT="${{ needs.resolve-versions.outputs.yeetmouse_commit }}"
+          KERNEL_TYPES="${{ inputs.kernel_types }}"
           REPO="${{ github.repository }}"
 
           {
             echo "notes<<EOF"
-            echo "RPM packages for YeetMouse **v${VER}** (commit ${SHORT_COMMIT})"
+            echo "RPM packages for YeetMouse **${COMMIT:0:7}**"
             echo ""
-            echo "## Build Information"
-            echo "- **Container Image:** \`${IMG}:${BUILD_TAG}\`"
-            echo "- **Kernel Version:** \`$KVER\`"
-            echo "- **YeetMouse Commit:** \`${SHORT_COMMIT}\`"
-
-            if [ "$ENABLE_KMOD" != "true" ]; then
-              echo ""
-              echo "> **Note:** kmod packages disabled (ENABLE_KMOD=false)"
-            fi
-
+            echo "**Kernel Types:** $KERNEL_TYPES"
+            echo ""
+            echo "> **Note:** The kmod packages are built for"
+            echo "> specific kernel versions. Install the package"
+            echo "> matching your kernel type (main for Aurora,"
+            echo "> bazzite for Bazzite)."
             echo ""
             echo "## Installation"
             echo "\`\`\`bash"
             echo "sudo wget \\"
             echo "  https://raw.githubusercontent.com/$REPO/main/yeetmouse.repo \\"
             echo "  -O /etc/yum.repos.d/yeetmouse.repo && \\"
-            echo "  sudo dnf install akmod-yeetmouse yeetmouse-gui"
+            echo "  sudo dnf install yeetmouse"
             echo "\`\`\`"
             echo ""
-            echo "**Post-install:** Run GUI with \`sudo -E yeetmouse-gui\`"
+            echo "**Post-install:** \`sudo usermod -aG yeetmouse \$USER\`"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Create release with packages
+      - name: Create or update GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-v${{ needs.build-rpm.outputs.version }}-${{ needs.build-rpm.outputs.short_commit }}
-          files: artifacts/release-packages/*
+          tag_name: build-${{ needs.resolve-versions.outputs.yeetmouse_commit }}-${{ needs.resolve-versions.outputs.yeetmouse_commit }}
+          files: artifacts/*.rpm
           body: ${{ steps.release_notes.outputs.notes }}
+          fail_on_unmatched_files: false
+          # This will update existing release if it exists
 
       - name: Prepare merged repository
         run: |
-          # Install createrepo_c for metadata generation
-          sudo apt-get update
-          sudo apt-get install -y createrepo-c
+          set -euo pipefail
+          echo "::group::Preparing merged repository"
+
+          # Install git for gh-pages action
+          dnf install -y git
 
           # Clone existing gh-pages branch to get current packages
+          echo "Cloning existing gh-pages branch..."
           git clone --depth=1 --branch=gh-pages \
             https://github.com/${{ github.repository }}.git gh-pages-repo \
             || mkdir -p gh-pages-repo
 
-          # Prepare repo with existing + new packages
-          mkdir -p repo
-          # Copy only RPM files from existing repo (not directories/metadata)
-          find gh-pages-repo -maxdepth 1 -name "*.rpm" \
-            -exec cp {} repo/ \; 2>/dev/null || true
-          cp artifacts/release-packages/*.rpm repo/ 2>/dev/null || true
+          # Determine Fedora version and architecture
+          FEDORA_VERSION="${{ needs.load-config.outputs.container_version }}"
+          ARCH="x86_64"
 
-          # Regenerate metadata for ALL packages
+          # Create Fedora-standard repository structure
+          # repo/fedora/VERSION/ARCH/ for binary RPMs
+          # repo/fedora/VERSION/source/ for source RPMs
+          REPO_BASE="repo/fedora/${FEDORA_VERSION}"
+          mkdir -p "${REPO_BASE}/${ARCH}"
+          mkdir -p "${REPO_BASE}/source"
+
+          # Copy existing packages from gh-pages (preserving structure)
+          if [ -d "gh-pages-repo/fedora" ]; then
+            echo "Copying existing packages from gh-pages..."
+            cp -r gh-pages-repo/fedora/* repo/fedora/ 2>/dev/null || true
+          fi
+
+          # Sort new packages into proper directories
+          echo "Organizing new packages..."
+          for rpm in artifacts/*.rpm; do
+            if [ -f "$rpm" ]; then
+              if [[ "$rpm" == *.src.rpm ]]; then
+                # Source RPMs go to source/
+                cp "$rpm" "${REPO_BASE}/source/"
+                echo "  → $(basename "$rpm") → source/"
+              else
+                # Binary RPMs go to arch directory
+                cp "$rpm" "${REPO_BASE}/${ARCH}/"
+                echo "  → $(basename "$rpm") → ${ARCH}/"
+              fi
+            fi
+          done
+
+          # Verify we have packages
+          if ! ls "${REPO_BASE}/${ARCH}"/*.rpm 1>/dev/null 2>&1 && \
+             ! ls "${REPO_BASE}/source"/*.rpm 1>/dev/null 2>&1; then
+            echo "::endgroup::"
+            echo "::error::No packages found after organization"
+            exit 1
+          fi
+
+          # List organized packages
+          echo ""
+          echo "Repository structure:"
+          echo "Binary packages (${ARCH}):"
+          ls -lh "${REPO_BASE}/${ARCH}"/*.rpm 2>/dev/null || echo "  (none)"
+          echo ""
+          echo "Source packages:"
+          ls -lh "${REPO_BASE}/source"/*.rpm 2>/dev/null || echo "  (none)"
+
+          # Generate repository metadata for binary packages
+          echo ""
+          echo "Generating repository metadata for ${ARCH}..."
+          createrepo_c "${REPO_BASE}/${ARCH}/"
+
+          # Generate repository metadata for source packages
+          echo "Generating repository metadata for source..."
+          createrepo_c "${REPO_BASE}/source/"
+
+          # Generate top-level metadata
+          echo "Generating top-level repository metadata..."
           createrepo_c repo/
 
-      - name: Deploy repo to GitHub Pages
+          echo "✓ Repository preparation complete"
+          echo "::endgroup::"
+
+      - name: Deploy repository to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: repo
-          keep_files: true
-
-  cleanup-on-failure:
-    needs: [update-specs, build-rpm, publish]
-    runs-on: ubuntu-latest
-    if: failure() && needs.update-specs.result == 'success'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-
-      - name: Revert spec update commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          COMMIT_SHA="${{ needs.update-specs.outputs.commit_sha }}"
-          echo "Reverting commit: $COMMIT_SHA"
-          
-          git revert $COMMIT_SHA --no-edit
-          git push
-          echo "Successfully reverted spec update due to build/publish failure"
+          keep_files: false
+          # keep_files: false ensures clean deployment
+          # All packages are in repo/ so nothing is lost

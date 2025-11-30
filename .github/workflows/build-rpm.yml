@@ -954,11 +954,12 @@ jobs:
           COMMIT="${{ needs.resolve-versions.outputs.yeetmouse_commit }}"
           SHORTCOMMIT="${COMMIT:0:7}"
           echo "title=YeetMouse v0.9.2-git${SHORTCOMMIT}" >> $GITHUB_OUTPUT
+          echo "tag=v0.9.2-git${SHORTCOMMIT}" >> $GITHUB_OUTPUT
 
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.9.2-${{ needs.resolve-versions.outputs.yeetmouse_commit }}
+          tag_name: ${{ steps.release_title.outputs.tag }}
           name: ${{ steps.release_title.outputs.title }}
           files: artifacts/*.rpm
           body: ${{ steps.release_notes.outputs.notes }}

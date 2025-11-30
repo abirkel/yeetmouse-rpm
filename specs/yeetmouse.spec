@@ -4,7 +4,7 @@
 
 Name:           yeetmouse
 Version:        %{?version}%{!?version:0.9.2}
-Release:        %{?release}%{!?release:1}%{?dist}
+Release:        %{?release}%{!?release:1}.git%{shortcommit}%{?dist}
 Summary:        GUI application for YeetMouse mouse acceleration configuration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse

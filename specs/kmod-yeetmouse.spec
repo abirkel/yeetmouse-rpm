@@ -14,7 +14,7 @@
 
 Name:           kmod-%{kmod_name}
 Version:        %{?version}%{!?version:0.9.2}
-Release:        %{?release}%{!?release:1}%{?dist}.%{kernel_version_rpm}
+Release:        %{?release}%{!?release:1}.git%{shortcommit}%{?dist}.%{kernel_version_rpm}
 Summary:        Kernel module for YeetMouse mouse acceleration driver
 
 License:        GPL-2.0-or-later

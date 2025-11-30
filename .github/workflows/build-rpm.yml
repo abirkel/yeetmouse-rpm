@@ -921,12 +921,13 @@ jobs:
         id: release_notes
         run: |
           COMMIT="${{ needs.resolve-versions.outputs.yeetmouse_commit }}"
+          SHORTCOMMIT="${COMMIT:0:7}"
           KERNEL_TYPES="${{ inputs.kernel_types }}"
           REPO="${{ github.repository }}"
 
           {
             echo "notes<<EOF"
-            echo "RPM packages for YeetMouse **${COMMIT:0:7}**"
+            echo "RPM packages for YeetMouse **${SHORTCOMMIT}**"
             echo ""
             echo "**Kernel Types:** $KERNEL_TYPES"
             echo ""
@@ -947,10 +948,18 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
+      - name: Prepare release title
+        id: release_title
+        run: |
+          COMMIT="${{ needs.resolve-versions.outputs.yeetmouse_commit }}"
+          SHORTCOMMIT="${COMMIT:0:7}"
+          echo "title=YeetMouse v0.9.2-git${SHORTCOMMIT}" >> $GITHUB_OUTPUT
+
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.9.2-${{ needs.resolve-versions.outputs.yeetmouse_commit }}
+          name: ${{ steps.release_title.outputs.title }}
           files: artifacts/*.rpm
           body: ${{ steps.release_notes.outputs.notes }}
           fail_on_unmatched_files: false

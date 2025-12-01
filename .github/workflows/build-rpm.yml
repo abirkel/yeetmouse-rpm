@@ -682,12 +682,8 @@ jobs:
           path: release-packages/
 
   publish:
-    needs: [build-rpm, resolve-versions, load-config]
+    needs: [build-rpm, resolve-versions]
     runs-on: ubuntu-latest
-    container:
-      image: >-
-        ${{ needs.load-config.outputs.container_image }}:${{
-        needs.load-config.outputs.container_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -704,7 +700,6 @@ jobs:
           set -euo pipefail
           echo "::group::Verifying downloaded packages"
 
-          # Check that artifacts directory exists and has packages
           if [ ! -d "artifacts" ]; then
             echo "::error::Artifacts directory not found"
             exit 1
@@ -712,14 +707,12 @@ jobs:
 
           if ! ls artifacts/*.rpm 1>/dev/null 2>&1; then
             echo "::error::No RPM packages found in artifacts"
-            echo "::error::Build jobs may have failed to produce packages"
             exit 1
           fi
 
           echo "Downloaded packages:"
           ls -lh artifacts/
 
-          # Verify each package is not empty
           for pkg in artifacts/*.rpm; do
             if [ ! -s "$pkg" ]; then
               echo "::error::Package file is empty: $pkg"
@@ -730,247 +723,88 @@ jobs:
           echo "✓ All packages verified"
           echo "::endgroup::"
 
-      - name: Install RPM signing tools
-        run: |
-          dnf install -y rpm-sign gnupg2 createrepo_c rpmsign
-
-      - name: Setup GPG for signing
-        run: |
-          set -euo pipefail
-          echo "::group::Setting up GPG for signing"
-
-          # Decode and import private key
-          if ! echo "${{ secrets.GPG_PRIVATE_KEY }}" | \
-              base64 -d > private.key; then
-            echo "::endgroup::"
-            echo "::error::Failed to decode GPG_PRIVATE_KEY"
-            echo "::error::Ensure the secret is properly base64 encoded"
-            exit 1
-          fi
-
-          if ! gpg --batch --passphrase "${{ secrets.GPG_PASSPHRASE }}" \
-            --import private.key 2>&1; then
-            rm -f private.key
-            echo "::endgroup::"
-            echo "::error::Failed to import GPG private key"
-            echo "::error::Check that GPG_PASSPHRASE is correct"
-            exit 1
-          fi
-
-          # Set trust level
-          if ! echo -e "5\ny\n" | gpg --batch --command-fd 0 \
-            --edit-key "${{ secrets.GPG_KEY_ID }}" trust 2>&1; then
-            rm -f private.key
-            echo "::endgroup::"
-            echo "::error::Failed to set trust level for GPG key"
-            exit 1
-          fi
-
-          rm -f private.key
-          echo "✓ GPG configured successfully"
-          echo "::endgroup::"
-
-      - name: Sign all RPM packages
-        run: |
-          set -euo pipefail
-          echo "::group::Signing RPM packages"
-
-          # Import public key into RPM database
-          gpg --export -a "${{ secrets.GPG_KEY_ID }}" > /tmp/gpg-pubkey.asc
-          rpm --import /tmp/gpg-pubkey.asc
-          
-          # Verify key is in RPM database
-          echo "Keys in RPM database:"
-          rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\t%{SUMMARY}\n'
-
-          # Create GPG wrapper script that handles passphrase
-          cat > /tmp/gpg-sign-wrapper.sh << 'WRAPPER_EOF'
-          #!/bin/bash
-          # GPG wrapper for RPM signing - reads passphrase from environment
-          echo "$GPG_PASSPHRASE" | /usr/bin/gpg \
-            --batch \
-            --pinentry-mode loopback \
-            --passphrase-fd 0 \
-            "$@"
-          WRAPPER_EOF
-          chmod +x /tmp/gpg-sign-wrapper.sh
-
-          # Test the wrapper script works
-          echo "Testing GPG wrapper..."
-          export GPG_PASSPHRASE="${{ secrets.GPG_PASSPHRASE }}"
-          if ! echo "test" | /tmp/gpg-sign-wrapper.sh --clearsign -u "${{ secrets.GPG_KEY_ID }}" > /dev/null 2>&1; then
-            echo "::error::GPG wrapper test failed - passphrase or key issue"
-            exit 1
-          fi
-          echo "✓ GPG wrapper test passed"
-
-          # List available secret keys with full details
-          echo "Available GPG secret keys:"
-          gpg --list-secret-keys --keyid-format LONG --with-subkey-fingerprints
-          
-          # Check key capabilities
-          echo ""
-          echo "Key capabilities check:"
-          gpg --list-keys --with-colons "${{ secrets.GPG_KEY_ID }}" | grep -E "^(pub|sub):" | while IFS=: read -r type trust keylen algo keyid date expires dummy uid_hash dummy2 caps rest; do
-            echo "  Type: $type, KeyID: $keyid, Capabilities: $caps"
-          done
-          
-          # Test actual detached signature creation (what RPM uses)
-          echo ""
-          echo "Testing detached signature creation (RPM-style)..."
-          echo "test data" > /tmp/test.txt
-          if /tmp/gpg-sign-wrapper.sh --detach-sign -u "${{ secrets.GPG_KEY_ID }}" --armor /tmp/test.txt 2>&1; then
-            echo "✓ Detached signature created successfully"
-            ls -la /tmp/test.txt.asc
-            # Verify the signature
-            if gpg --verify /tmp/test.txt.asc /tmp/test.txt 2>&1; then
-              echo "✓ Signature verification successful"
-            else
-              echo "::error::Signature verification FAILED"
-            fi
-          else
-            echo "::error::Failed to create detached signature"
-          fi
-
-          # Configure GPG to use SHA256 for digests
-          cat > ~/.gnupg/gpg.conf << 'GPG_CONF'
-          personal-digest-preferences SHA256
-          cert-digest-algo SHA256
-          default-preference-list SHA512 SHA384 SHA256 SHA224 AES256 AES192 AES CAST5 ZLIB BZIP2 ZIP Uncompressed
-          GPG_CONF
-
-          # Configure RPM to use wrapper script with SHA256
-          cat > ~/.rpmmacros << 'EOF'
-          %_signature gpg
-          %_gpg_name ${{ secrets.GPG_KEY_ID }}
-          %__gpg /tmp/gpg-sign-wrapper.sh
-          %_gpg_digest_algo sha256
-          EOF
-
-          echo "RPM macros configured:"
-          cat ~/.rpmmacros
-
-          # Create passphrase file for GPG
-          echo "$GPG_PASSPHRASE" > /tmp/gpg-passphrase
-          chmod 600 /tmp/gpg-passphrase
-          
-          # Update wrapper to use passphrase file
-          cat > /tmp/gpg-sign-wrapper.sh << 'WRAPPER_EOF'
-          #!/bin/bash
-          /usr/bin/gpg \
-            --batch \
-            --pinentry-mode loopback \
-            --passphrase-file /tmp/gpg-passphrase \
-            "$@"
-          WRAPPER_EOF
-          chmod +x /tmp/gpg-sign-wrapper.sh
-          
-          # Test signing with the updated wrapper
-          echo "Testing signing with passphrase file..."
-          if ! echo "test" | /tmp/gpg-sign-wrapper.sh --clearsign -u "${{ secrets.GPG_KEY_ID }}" > /dev/null 2>&1; then
-            echo "::error::GPG signing test failed"
-            exit 1
-          fi
-          echo "✓ GPG signing test passed"
-
-          # Sign all RPM packages with verbose output
-          cd artifacts
-          SIGN_FAILED=0
-          for rpm in *.rpm; do
-            if [ -f "$rpm" ]; then
-              echo "Signing $rpm"
-              echo "Running: rpm --addsign --define '_gpg_name ${{ secrets.GPG_KEY_ID }}' --define '__gpg /tmp/gpg-sign-wrapper.sh' $rpm"
-              if ! rpm --addsign --define "_gpg_name ${{ secrets.GPG_KEY_ID }}" --define "__gpg /tmp/gpg-sign-wrapper.sh" "$rpm" 2>&1; then
-                echo "::error::Failed to sign package: $rpm"
-                SIGN_FAILED=1
-              fi
-              
-              # Verify signature immediately after signing
-              echo "Checking signature on $rpm..."
-              rpm --checksig -v "$rpm" 2>&1 || true
-              
-              # Check if GPG signature exists
-              echo "Checking for GPG signature..."
-              rpm -qp --qf '%{SIGPGP:pgpsig}\n' "$rpm" 2>&1 || echo "No GPG signature found"
-            fi
-          done
-
-          if [ $SIGN_FAILED -eq 1 ]; then
-            echo "::endgroup::"
-            echo "::error::One or more packages failed to sign"
-            exit 1
-          fi
-
-          echo "✓ All packages signed successfully"
-          echo "::endgroup::"
-
-      - name: Verify package signatures
-        run: |
-          set -euo pipefail
-          echo "::group::Verifying package signatures"
-
-          cd artifacts
-          VERIFY_FAILED=0
-          for rpm in *.rpm; do
-            if [ -f "$rpm" ]; then
-              echo "Verifying signature for $rpm"
-              if ! rpm --checksig -v "$rpm" 2>&1 | grep -qi "OpenPGP.*OK"; then
-                echo "::error::Signature verification failed for: $rpm"
-                rpm --checksig -v "$rpm" || true
-                VERIFY_FAILED=1
-              else
-                echo "✓ Signature valid for $rpm"
-              fi
-            fi
-          done
-
-          if [ $VERIFY_FAILED -eq 1 ]; then
-            echo "::endgroup::"
-            echo "::error::One or more packages have invalid signatures"
-            echo "::error::Refusing to publish unsigned/invalid packages"
-            exit 1
-          fi
-
-          echo "✓ All package signatures verified"
-          echo "::endgroup::"
-
       - name: Prepare release notes
         id: release_notes
         run: |
           COMMIT="${{ needs.resolve-versions.outputs.yeetmouse_commit }}"
           SHORTCOMMIT="${COMMIT:0:7}"
           KERNEL_TYPES="${{ inputs.kernel_types }}"
-          REPO="${{ github.repository }}"
+          RELEASE_TYPE="${{ inputs.release_type }}"
 
           {
             echo "notes<<EOF"
-            echo "RPM packages for YeetMouse **${SHORTCOMMIT}**"
+            echo "## ⚠️ Package Signing & Distribution"
             echo ""
-            echo "**Kernel Types:** $KERNEL_TYPES"
+            echo "The RPM packages in this repository are **unsigned**. For signed, verified packages with automatic updates, use the central RPM repository:"
             echo ""
-            echo "> **Note:** The kmod packages are built for specific kernel versions. Install the package matching your kernel type (main for Aurora, bazzite for Bazzite)."
+            echo "### Install from Central Repository (Recommended)"
             echo ""
-            echo "## Installation"
             echo "\`\`\`bash"
-            echo "sudo wget \\"
-            echo "  https://raw.githubusercontent.com/$REPO/main/yeetmouse.repo \\"
-            echo "  -O /etc/yum.repos.d/yeetmouse.repo && \\"
-            echo "  sudo dnf install yeetmouse"
+            echo "# Add the central repository (stable channel)"
+            echo "sudo curl -o /etc/yum.repos.d/stable.repo \\"
+            echo "  https://abirkel.github.io/rpm-repo/repo/stable.repo"
+            echo ""
+            echo "# Install"
+            echo "sudo dnf install yeetmouse"
             echo "\`\`\`"
             echo ""
-            echo "**Post-install:** \`sudo usermod -aG yeetmouse \$USER\`"
+            echo "The GPG key is automatically imported from the repository configuration."
+            echo ""
+            echo "### Install from This Repository (Unsigned)"
+            echo ""
+            echo "If you prefer to install directly from this repository:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "# Download and install RPM manually"
+            echo "sudo dnf install <rpm-url-from-release>"
+            echo "\`\`\`"
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Release Information"
+            echo ""
+            echo "**YeetMouse Commit:** \`${SHORTCOMMIT}\`"
+            echo "**Kernel Types:** $KERNEL_TYPES"
+            echo "**Release Type:** $RELEASE_TYPE"
+            echo ""
+            echo "> **Note:** The kmod packages are built for specific kernel versions. Install the package matching your kernel type (main for Aurora, bazzite for Bazzite)."
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
       - name: Prepare release title
         id: release_title
         run: |
+          set -euo pipefail
           COMMIT="${{ needs.resolve-versions.outputs.yeetmouse_commit }}"
           SHORTCOMMIT="${COMMIT:0:7}"
-          echo "title=YeetMouse v0.9.2-git${SHORTCOMMIT}" >> $GITHUB_OUTPUT
-          echo "tag=v0.9.2-git${SHORTCOMMIT}" >> $GITHUB_OUTPUT
+          RELEASE_TYPE="${{ inputs.release_type }}"
 
-      - name: Create or update GitHub release
+          # Extract version from first CLI package found
+          CLI_PKG=$(find artifacts -name "yeetmouse-*.fc*.x86_64.rpm" | head -1)
+          if [ -z "$CLI_PKG" ]; then
+            echo "::error::Could not find CLI package to extract version"
+            exit 1
+          fi
+
+          # Extract version from package filename
+          # Format: yeetmouse-VERSION-RELEASE.fc43.x86_64.rpm
+          PKG_BASENAME=$(basename "$CLI_PKG")
+          VERSION=$(echo "$PKG_BASENAME" | sed -E 's/yeetmouse-([0-9.]+)-.*/\1/')
+
+          if [ -z "$VERSION" ] || [ "$VERSION" = "$PKG_BASENAME" ]; then
+            echo "::error::Could not extract version from package: $PKG_BASENAME"
+            exit 1
+          fi
+
+          TITLE="v${VERSION}-git${SHORTCOMMIT}-${RELEASE_TYPE}"
+          TAG="v${VERSION}-git${SHORTCOMMIT}-${RELEASE_TYPE}"
+
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+          echo "Release title: $TITLE"
+
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_title.outputs.tag }}
@@ -978,93 +812,17 @@ jobs:
           files: artifacts/*.rpm
           body: ${{ steps.release_notes.outputs.notes }}
           fail_on_unmatched_files: false
-          # This will update existing release if it exists
 
-      - name: Prepare merged repository
-        run: |
-          set -euo pipefail
-          echo "::group::Preparing merged repository"
-
-          # Install git for gh-pages action
-          dnf install -y git
-
-          # Clone existing gh-pages branch to get current packages
-          echo "Cloning existing gh-pages branch..."
-          git clone --depth=1 --branch=gh-pages \
-            https://github.com/${{ github.repository }}.git gh-pages-repo \
-            || mkdir -p gh-pages-repo
-
-          # Determine Fedora version and architecture
-          FEDORA_VERSION="${{ needs.load-config.outputs.container_version }}"
-          ARCH="x86_64"
-
-          # Create Fedora-standard repository structure
-          # repo/fedora/VERSION/ARCH/ for binary RPMs
-          # repo/fedora/VERSION/source/ for source RPMs
-          REPO_BASE="repo/fedora/${FEDORA_VERSION}"
-          mkdir -p "${REPO_BASE}/${ARCH}"
-          mkdir -p "${REPO_BASE}/source"
-
-          # Copy existing packages from gh-pages (preserving structure)
-          if [ -d "gh-pages-repo/fedora" ]; then
-            echo "Copying existing packages from gh-pages..."
-            cp -r gh-pages-repo/fedora/* repo/fedora/ 2>/dev/null || true
-          fi
-
-          # Sort new packages into proper directories
-          echo "Organizing new packages..."
-          for rpm in artifacts/*.rpm; do
-            if [ -f "$rpm" ]; then
-              if [[ "$rpm" == *.src.rpm ]]; then
-                # Source RPMs go to source/
-                cp "$rpm" "${REPO_BASE}/source/"
-                echo "  → $(basename "$rpm") → source/"
-              else
-                # Binary RPMs go to arch directory
-                cp "$rpm" "${REPO_BASE}/${ARCH}/"
-                echo "  → $(basename "$rpm") → ${ARCH}/"
-              fi
-            fi
-          done
-
-          # Verify we have packages
-          if ! ls "${REPO_BASE}/${ARCH}"/*.rpm 1>/dev/null 2>&1 && \
-             ! ls "${REPO_BASE}/source"/*.rpm 1>/dev/null 2>&1; then
-            echo "::endgroup::"
-            echo "::error::No packages found after organization"
-            exit 1
-          fi
-
-          # List organized packages
-          echo ""
-          echo "Repository structure:"
-          echo "Binary packages (${ARCH}):"
-          ls -lh "${REPO_BASE}/${ARCH}"/*.rpm 2>/dev/null || echo "  (none)"
-          echo ""
-          echo "Source packages:"
-          ls -lh "${REPO_BASE}/source"/*.rpm 2>/dev/null || echo "  (none)"
-
-          # Generate repository metadata for binary packages
-          echo ""
-          echo "Generating repository metadata for ${ARCH}..."
-          createrepo_c "${REPO_BASE}/${ARCH}/"
-
-          # Generate repository metadata for source packages
-          echo "Generating repository metadata for source..."
-          createrepo_c "${REPO_BASE}/source/"
-
-          # Generate top-level metadata
-          echo "Generating top-level repository metadata..."
-          createrepo_c repo/
-
-          echo "✓ Repository preparation complete"
-          echo "::endgroup::"
-
-      - name: Deploy repository to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Publish to central RPM repository
+        uses: abirkel/rpm-repo/.github/workflows/publish-rpm.yml@main
+        strategy:
+          matrix:
+            include:
+              - rpm_artifact_name: rpm-packages-main
+              - rpm_artifact_name: rpm-packages-bazzite
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: repo
-          keep_files: false
-          # keep_files: false ensures clean deployment
-          # All packages are in repo/ so nothing is lost
+          rpm_artifact_name: ${{ matrix.rpm_artifact_name }}
+          distro: fedora
+          release: ${{ needs.load-config.outputs.container_version }}
+          arch: x86_64
+        secrets: inherit

@@ -21,6 +21,7 @@ dist/
 .kiro
 yeetmouse-ref/
 maccel-rpm/
+rpm-repo/
 
 # Python
 __pycache__/

@@ -813,15 +813,22 @@ jobs:
           body: ${{ steps.release_notes.outputs.notes }}
           fail_on_unmatched_files: false
 
+  publish-to-repo:
+    needs: [build-rpm, resolve-versions, load-config, generate-matrix]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rpm-packages-${{ matrix.kernel_type }}
+          path: artifacts/
+
       - name: Publish to central RPM repository
         uses: abirkel/rpm-repo/.github/workflows/publish-rpm.yml@main
-        strategy:
-          matrix:
-            include:
-              - rpm_artifact_name: rpm-packages-main
-              - rpm_artifact_name: rpm-packages-bazzite
         with:
-          rpm_artifact_name: ${{ matrix.rpm_artifact_name }}
+          rpm_artifact_name: rpm-packages-${{ matrix.kernel_type }}
           distro: fedora
           release: ${{ needs.load-config.outputs.container_version }}
           arch: x86_64

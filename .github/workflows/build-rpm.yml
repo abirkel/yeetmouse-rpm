@@ -490,7 +490,7 @@ jobs:
           if ! CLI_RELEASE_NUMBER=$(./scripts/determine-cli-release-number.sh \
             --yeetmouse-commit "$YEETMOUSE_COMMIT" \
             --release-type "$RELEASE_TYPE" \
-            --repo "${{ github.repository }}ne CLI r
+            --repo "${{ github.repository }}"); then
             echo "::endgroup::"
             echo "::error::Failed to determine CLI release number"
             echo "::error::YeetMouse commit: $YEETMOUSE_COMMIT"

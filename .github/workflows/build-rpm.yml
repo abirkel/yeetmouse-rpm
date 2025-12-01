@@ -103,6 +103,7 @@ name: Build and Publish RPM Packages
 permissions:
   contents: write
   packages: write
+  actions: read
 
 jobs:
   load-config:

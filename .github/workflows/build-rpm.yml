@@ -17,7 +17,7 @@ name: Build and Publish RPM Packages
         type: string
         default: ''
       yeetmouse_commit:
-        description: 'YeetMouse commit to build (e.g., 99844bbd786d612657d892cac2f663d940fd3d62)'
+        description: 'YeetMouse commit to build (e.g., 99844bb)'
         required: false
         type: string
         default: ''
@@ -44,6 +44,14 @@ name: Build and Publish RPM Packages
         required: false
         type: string
         default: ''
+      release_type:
+        description: 'Release type (stable or testing)'
+        required: false
+        type: choice
+        options:
+          - stable
+          - testing
+        default: 'stable'
   workflow_call:
     inputs:
       kernel_types:
@@ -59,7 +67,7 @@ name: Build and Publish RPM Packages
         type: string
         default: ''
       yeetmouse_commit:
-        description: 'YeetMouse commit to build (e.g., 99844bbd786d612657d892cac2f663d940fd3d62)'
+        description: 'YeetMouse commit to build (e.g., 99844bb)'
         required: false
         type: string
         default: ''
@@ -86,6 +94,11 @@ name: Build and Publish RPM Packages
         required: false
         type: string
         default: ''
+      release_type:
+        description: 'Release type (stable or testing)'
+        required: false
+        type: string
+        default: 'stable'
 
 permissions:
   contents: write
@@ -425,6 +438,7 @@ jobs:
           YEETMOUSE_COMMIT="${{ steps.load_yeetmouse.outputs.yeetmouse_commit }}"
           KERNEL_VERSION="${{ steps.load_version.outputs.kernel_version }}"
           KERNEL_TYPE="${{ matrix.kernel_type }}"
+          RELEASE_TYPE="${{ inputs.release_type }}"
 
           echo "::group::Determining release number"
 
@@ -436,6 +450,7 @@ jobs:
             --yeetmouse-commit "$YEETMOUSE_COMMIT" \
             --kernel-version "$KERNEL_VERSION" \
             --kernel-type "$KERNEL_TYPE" \
+            --release-type "$RELEASE_TYPE" \
             --repo "${{ github.repository }}"); then
             echo "::endgroup::"
             echo "::error::Failed to determine release number"
@@ -463,6 +478,7 @@ jobs:
         run: |
           set -euo pipefail
           YEETMOUSE_COMMIT="${{ steps.load_yeetmouse.outputs.yeetmouse_commit }}"
+          RELEASE_TYPE="${{ inputs.release_type }}"
 
           echo "::group::Determining CLI release number"
 
@@ -472,7 +488,8 @@ jobs:
           # Determine CLI release number with error handling
           if ! CLI_RELEASE_NUMBER=$(./scripts/determine-cli-release-number.sh \
             --yeetmouse-commit "$YEETMOUSE_COMMIT" \
-            --repo "${{ github.repository }}"); then
+            --release-type "$RELEASE_TYPE" \
+            --repo "${{ github.repository }}ne CLI r
             echo "::endgroup::"
             echo "::error::Failed to determine CLI release number"
             echo "::error::YeetMouse commit: $YEETMOUSE_COMMIT"

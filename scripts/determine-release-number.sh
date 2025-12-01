@@ -9,6 +9,7 @@ set -euo pipefail
 YEETMOUSE_COMMIT=""
 KERNEL_VERSION=""
 KERNEL_TYPE=""
+RELEASE_TYPE="stable"
 GITHUB_REPO="abirkel/yeetmouse-rpm"
 
 # Parse CLI options
@@ -26,13 +27,17 @@ while [[ $# -gt 0 ]]; do
       KERNEL_TYPE="$2"
       shift 2
       ;;
+    --release-type)
+      RELEASE_TYPE="$2"
+      shift 2
+      ;;
     --repo)
       GITHUB_REPO="$2"
       shift 2
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 --yeetmouse-commit <commit> --kernel-version <version> --kernel-type <main|bazzite> [--repo <owner/repo>]"
+      echo "Usage: $0 --yeetmouse-commit <commit> --kernel-version <version> --kernel-type <main|bazzite> [--release-type <stable|testing>] [--repo <owner/repo>]"
       exit 1
       ;;
   esac
@@ -59,6 +64,11 @@ if [[ "$KERNEL_TYPE" != "main" && "$KERNEL_TYPE" != "bazzite" ]]; then
   exit 1
 fi
 
+if [[ "$RELEASE_TYPE" != "stable" && "$RELEASE_TYPE" != "testing" ]]; then
+  echo "Error: release-type must be 'stable' or 'testing', got '$RELEASE_TYPE'"
+  exit 1
+fi
+
 # Extract short commit (first 7 characters)
 YEETMOUSE_SHORT_COMMIT="${YEETMOUSE_COMMIT:0:7}"
 
@@ -67,6 +77,7 @@ echo "  YeetMouse commit: $YEETMOUSE_COMMIT" >&2
 echo "  YeetMouse short commit: $YEETMOUSE_SHORT_COMMIT" >&2
 echo "  Kernel version: $KERNEL_VERSION" >&2
 echo "  Kernel type: $KERNEL_TYPE" >&2
+echo "  Release type: $RELEASE_TYPE" >&2
 echo "  Repository: $GITHUB_REPO" >&2
 
 # Query GitHub releases API
@@ -129,7 +140,24 @@ KERNEL_VERSION_RPM_ESCAPED="${KERNEL_VERSION_RPM//./\\.}"
 
 # Find matching packages and extract release numbers
 # Pattern: kmod-yeetmouse-SHORTCOMMIT-RELEASE.fc43.KERNEL_VERSION_RPM.x86_64.rpm
+# Filter by release type from release names (v0.9.2-stable or v0.9.2-testing)
 MATCHING_PACKAGES=$(echo "$ASSET_NAMES" | grep -E "^kmod-yeetmouse-${YEETMOUSE_SHORT_COMMIT_ESCAPED}-[0-9]+\.fc[0-9]+\.${KERNEL_VERSION_RPM_ESCAPED}\.x86_64\.rpm$" || true)
+
+# Further filter by release type by checking release names
+if [[ -n "$MATCHING_PACKAGES" ]]; then
+  # Get release names from the API response
+  RELEASE_NAMES=$(echo "$RELEASES_JSON" | jq -r '.[].name' 2>&1)
+  
+  # Filter releases by type (e.g., v0.9.2-stable or v0.9.2-testing)
+  FILTERED_RELEASES=$(echo "$RELEASE_NAMES" | grep -E "\-${RELEASE_TYPE}$" || true)
+  
+  if [[ -n "$FILTERED_RELEASES" ]]; then
+    # Extract asset names from filtered releases only
+    MATCHING_PACKAGES=$(echo "$RELEASES_JSON" | jq -r ".[] | select(.name | test(\"-${RELEASE_TYPE}$\")) | .assets[].name" | grep -E "^kmod-yeetmouse-${YEETMOUSE_SHORT_COMMIT_ESCAPED}-[0-9]+\.fc[0-9]+\.${KERNEL_VERSION_RPM_ESCAPED}\.x86_64\.rpm$" || true)
+  else
+    MATCHING_PACKAGES=""
+  fi
+fi
 
 if [[ -z "$MATCHING_PACKAGES" ]]; then
   echo "No matching packages found for commit $YEETMOUSE_SHORT_COMMIT and kernel $KERNEL_VERSION" >&2

@@ -203,10 +203,12 @@ jobs:
           echo "  yeetmouse_commit: $YEETMOUSE_COMMIT"
           echo "  kernel_types: $KERNEL_TYPES"
           echo "  build_cli: $BUILD_CLI"
+          echo "  release_type: stable"
 
           gh workflow run build-rpm.yml --ref ${{ github.ref_name }} \
             -f yeetmouse_commit="$YEETMOUSE_COMMIT" \
             -f kernel_types="$KERNEL_TYPES" \
-            -f build_cli="$BUILD_CLI"
+            -f build_cli="$BUILD_CLI" \
+            -f release_type="stable"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

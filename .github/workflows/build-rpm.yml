@@ -399,26 +399,15 @@ jobs:
           set -euo pipefail
           echo "::group::Installing kernel-devel packages"
 
-          KERNEL_TYPE="${{ matrix.kernel_type }}"
           KERNEL_VERSION="${{ steps.load_version.outputs.kernel_version }}"
 
-          # For Bazzite kernels, only install kernel-devel (not kernel-devel-matched)
-          # kernel-devel-matched requires kernel-core which isn't available for Bazzite
-          if [[ "$KERNEL_TYPE" == "bazzite" ]]; then
-            echo "Installing kernel-devel only (Bazzite kernel)..."
-            if ! dnf install -y ~/kernel-packages/kernel-devel-${KERNEL_VERSION}.rpm; then
-              echo "::endgroup::"
-              echo "::error::Failed to install kernel-devel package"
-              exit 1
-            fi
-          else
-            echo "Installing all kernel-devel packages (main kernel)..."
-            if ! dnf install -y ~/kernel-packages/kernel-devel*.rpm; then
-              echo "::endgroup::"
-              echo "::error::Failed to install kernel-devel packages"
-              echo "::error::Package corruption or dependency issues"
-              exit 1
-            fi
+          # In container builds, only install kernel-devel (not kernel-devel-matched)
+          # kernel-devel-matched requires kernel-core which isn't available in containers
+          echo "Installing kernel-devel only (container build)..."
+          if ! dnf install -y ~/kernel-packages/kernel-devel-${KERNEL_VERSION}.rpm; then
+            echo "::endgroup::"
+            echo "::error::Failed to install kernel-devel package"
+            exit 1
           fi
 
           # Verify installation
@@ -819,7 +808,7 @@ jobs:
     if: contains(inputs.kernel_types, 'main')
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger rpm-repo signing
+      - name: Trigger rpm-repo signing and publishing
         run: |
           gh api repos/abirkel/rpm-repo/dispatches \
             -f event_type=sign-rpm \
@@ -838,7 +827,7 @@ jobs:
     if: contains(inputs.kernel_types, 'bazzite')
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger rpm-repo signing
+      - name: Trigger rpm-repo signing and publishing
         run: |
           gh api repos/abirkel/rpm-repo/dispatches \
             -f event_type=sign-rpm \

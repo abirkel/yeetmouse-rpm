@@ -769,17 +769,21 @@ jobs:
           SHORTCOMMIT="${COMMIT:0:7}"
           RELEASE_TYPE="${{ inputs.release_type }}"
 
-          # Extract version from first CLI package found
-          CLI_PKG=$(find artifacts -name "yeetmouse-*.fc*.x86_64.rpm" | head -1)
-          if [ -z "$CLI_PKG" ]; then
-            echo "::error::Could not find CLI package to extract version"
+          # Extract version from CLI package first, fallback to kmod package
+          PKG=$(find artifacts -name "yeetmouse-*.fc*.x86_64.rpm" ! -name "kmod-*" | head -1)
+          if [ -z "$PKG" ]; then
+            # Fallback to kmod package
+            PKG=$(find artifacts -name "kmod-yeetmouse-*.rpm" | head -1)
+          fi
+          if [ -z "$PKG" ]; then
+            echo "::error::Could not find any package to extract version"
             exit 1
           fi
 
           # Extract version from package filename
-          # Format: yeetmouse-VERSION-RELEASE.fc43.x86_64.rpm
-          PKG_BASENAME=$(basename "$CLI_PKG")
-          VERSION=$(echo "$PKG_BASENAME" | sed -E 's/yeetmouse-([0-9.]+)-.*/\1/')
+          PKG_BASENAME=$(basename "$PKG")
+          # Handle both yeetmouse-VERSION and kmod-yeetmouse-VERSION formats
+          VERSION=$(echo "$PKG_BASENAME" | sed -E 's/^(kmod-)?yeetmouse-([0-9.]+)-.*/\2/')
 
           if [ -z "$VERSION" ] || [ "$VERSION" = "$PKG_BASENAME" ]; then
             echo "::error::Could not extract version from package: $PKG_BASENAME"

@@ -810,17 +810,17 @@ jobs:
     steps:
       - name: Trigger rpm-repo signing and publishing
         run: |
-          gh api repos/abirkel/rpm-repo/dispatches \
-            -f event_type=sign-rpm \
-            -f client_payload[builder_repo]=${{ github.repository }} \
-            -f client_payload[run_id]=${{ github.run_id }} \
-            -f client_payload[artifact_name]=rpm-packages-main \
-            -f client_payload[distro]=fedora \
-            -f client_payload[release]=${{ needs.load-config.outputs.container_version }} \
-            -f client_payload[arch]=x86_64 \
-            -f client_payload[build_type]=${{ inputs.release_type }}
+          gh workflow run sign-and-publish.yml \
+            --repo abirkel/rpm-repo \
+            -f builder_repo=${{ github.repository }} \
+            -f run_id=${{ github.run_id }} \
+            -f artifact_name=rpm-packages-main \
+            -f distro=fedora \
+            -f release=${{ needs.load-config.outputs.container_version }} \
+            -f arch=x86_64 \
+            -f build_type=${{ inputs.release_type }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RPM_REPO_DISPATCH_TOKEN }}
 
   publish-to-repo-bazzite:
     needs: [build-rpm, resolve-versions, load-config]
@@ -829,14 +829,14 @@ jobs:
     steps:
       - name: Trigger rpm-repo signing and publishing
         run: |
-          gh api repos/abirkel/rpm-repo/dispatches \
-            -f event_type=sign-rpm \
-            -f client_payload[builder_repo]=${{ github.repository }} \
-            -f client_payload[run_id]=${{ github.run_id }} \
-            -f client_payload[artifact_name]=rpm-packages-bazzite \
-            -f client_payload[distro]=fedora \
-            -f client_payload[release]=${{ needs.load-config.outputs.container_version }} \
-            -f client_payload[arch]=x86_64 \
-            -f client_payload[build_type]=${{ inputs.release_type }}
+          gh workflow run sign-and-publish.yml \
+            --repo abirkel/rpm-repo \
+            -f builder_repo=${{ github.repository }} \
+            -f run_id=${{ github.run_id }} \
+            -f artifact_name=rpm-packages-bazzite \
+            -f distro=fedora \
+            -f release=${{ needs.load-config.outputs.container_version }} \
+            -f arch=x86_64 \
+            -f build_type=${{ inputs.release_type }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RPM_REPO_DISPATCH_TOKEN }}

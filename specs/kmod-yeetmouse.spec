@@ -8,13 +8,11 @@
 %global kmod_name yeetmouse
 %global commit %{?commit}%{!?commit:99844bbd786d612657d892cac2f663d940fd3d62}
 %global shortcommit %{?shortcommit}%{!?shortcommit:99844bb}
-# Convert kernel version for RPM filename: replace - with _ and remove arch suffix
-# Note: RPM will add .x86_64 automatically to binary packages
-%global kernel_version_rpm %(echo %{kernel_version} | sed 's/-/_/g' | sed 's/\\.x86_64$//')
+%global commit_timestamp %{?commit_timestamp}%{!?commit_timestamp:202412091624}
 
 Name:           kmod-%{kmod_name}
-Version:        %{?version}%{!?version:0.9.2}
-Release:        %{?release}%{!?release:1}.git%{shortcommit}%{?dist}.%{kernel_version_rpm}
+Version:        0
+Release:        %{?release}%{!?release:1}.%{commit_timestamp}g%{shortcommit}%{?dist}
 Summary:        Kernel module for YeetMouse mouse acceleration driver
 
 License:        GPL-2.0-or-later

@@ -96,8 +96,8 @@ if [[ -z "$ASSET_NAMES" ]]; then
 fi
 
 # Look for CLI packages matching our commit
-# Package naming pattern: yeetmouse-SHORTCOMMIT-RELEASE.fc43.x86_64.rpm
-# Example: yeetmouse-99844bb-1.fc43.x86_64.rpm
+# Package naming pattern: yeetmouse-0-PKGREL.TIMESTAMPgSHORTCOMMIT.fc43.x86_64.rpm
+# Example: yeetmouse-0-1.202512091624g99844bb.fc43.x86_64.rpm
 
 echo "Searching for existing CLI packages..." >&2
 
@@ -105,8 +105,8 @@ echo "Searching for existing CLI packages..." >&2
 YEETMOUSE_SHORT_COMMIT_ESCAPED="${YEETMOUSE_SHORT_COMMIT//./\\.}"
 
 # Find matching packages and extract release numbers
-# Pattern: yeetmouse-SHORTCOMMIT-RELEASE.fc43.x86_64.rpm (not kmod-yeetmouse)
-MATCHING_PACKAGES=$(echo "$ASSET_NAMES" | grep -E "^yeetmouse-${YEETMOUSE_SHORT_COMMIT_ESCAPED}-[0-9]+\.fc[0-9]+\.x86_64\.rpm$" || true)
+# Pattern: yeetmouse-0-PKGREL.TIMESTAMPgSHORTCOMMIT.fc43.x86_64.rpm (not kmod-yeetmouse)
+MATCHING_PACKAGES=$(echo "$ASSET_NAMES" | grep -E "^yeetmouse-0-[0-9]+\.[0-9]{12}g${YEETMOUSE_SHORT_COMMIT_ESCAPED}\.fc[0-9]+\.x86_64\.rpm$" || true)
 
 # Further filter by release type by checking release names
 if [[ -n "$MATCHING_PACKAGES" ]]; then
@@ -118,7 +118,7 @@ if [[ -n "$MATCHING_PACKAGES" ]]; then
   
   if [[ -n "$FILTERED_RELEASES" ]]; then
     # Extract asset names from filtered releases only
-    MATCHING_PACKAGES=$(echo "$RELEASES_JSON" | jq -r ".[] | select(.name | test(\"-${RELEASE_TYPE}$\")) | .assets[].name" | grep -E "^yeetmouse-${YEETMOUSE_SHORT_COMMIT_ESCAPED}-[0-9]+\.fc[0-9]+\.x86_64\.rpm$" || true)
+    MATCHING_PACKAGES=$(echo "$RELEASES_JSON" | jq -r ".[] | select(.name | test(\"-${RELEASE_TYPE}$\")) | .assets[].name" | grep -E "^yeetmouse-0-[0-9]+\.[0-9]{12}g${YEETMOUSE_SHORT_COMMIT_ESCAPED}\.fc[0-9]+\.x86_64\.rpm$" || true)
   else
     MATCHING_PACKAGES=""
   fi
@@ -137,9 +137,9 @@ while IFS= read -r pkg; do
 done <<< "$MATCHING_PACKAGES"
 
 # Extract release numbers from matching packages
-# Pattern: yeetmouse-SHORTCOMMIT-RELEASE.fc43.x86_64.rpm
-# We need to extract RELEASE (the number between SHORTCOMMIT- and .fc43)
-RELEASE_NUMBERS=$(echo "$MATCHING_PACKAGES" | sed -E "s/^yeetmouse-${YEETMOUSE_SHORT_COMMIT_ESCAPED}-([0-9]+)\.fc[0-9]+\.x86_64\.rpm$/\1/")
+# Pattern: yeetmouse-0-PKGREL.TIMESTAMPgSHORTCOMMIT.fc43.x86_64.rpm
+# We need to extract PKGREL (the number after -0- and before the timestamp)
+RELEASE_NUMBERS=$(echo "$MATCHING_PACKAGES" | sed -E "s/^yeetmouse-0-([0-9]+)\.[0-9]{12}g${YEETMOUSE_SHORT_COMMIT_ESCAPED}\.fc[0-9]+\.x86_64\.rpm$/\1/")
 
 # Find the highest release number
 MAX_RELEASE=0

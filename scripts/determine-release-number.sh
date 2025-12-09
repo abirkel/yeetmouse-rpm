@@ -123,25 +123,20 @@ if [[ -z "$ASSET_NAMES" ]]; then
 fi
 
 # Look for kmod packages matching our commit and kernel version
-# Package naming pattern: kmod-yeetmouse-SHORTCOMMIT-RELEASE.fc43.KERNEL_VERSION_RPM.x86_64.rpm
-# Example: kmod-yeetmouse-99844bb-1.fc43.6.17.8_300.fc43.x86_64.rpm
-# Note: kernel version has dashes replaced with underscores in RPM filename
+# Package naming pattern: kmod-yeetmouse-KERNEL_VERSION-0-PKGREL.TIMESTAMPgSHORTCOMMIT.fc43.x86_64.rpm
+# Example: kmod-yeetmouse-6.11.8-300.fc43.x86_64-0-1.202512091624g99844bb.fc43.x86_64.rpm
 
 echo "Searching for existing packages..." >&2
 
-# Escape dots in commit string for regex
+# Escape dots and dashes in strings for regex
 YEETMOUSE_SHORT_COMMIT_ESCAPED="${YEETMOUSE_SHORT_COMMIT//./\\.}"
-
-# Convert kernel version to RPM format (replace - with _, remove .x86_64)
-KERNEL_VERSION_RPM="${KERNEL_VERSION//-/_}"
-KERNEL_VERSION_RPM="${KERNEL_VERSION_RPM%.x86_64}"
-# Escape dots for regex
-KERNEL_VERSION_RPM_ESCAPED="${KERNEL_VERSION_RPM//./\\.}"
+KERNEL_VERSION_ESCAPED="${KERNEL_VERSION//./\\.}"
+KERNEL_VERSION_ESCAPED="${KERNEL_VERSION_ESCAPED//-/\\-}"
 
 # Find matching packages and extract release numbers
-# Pattern: kmod-yeetmouse-SHORTCOMMIT-RELEASE.fc43.KERNEL_VERSION_RPM.x86_64.rpm
-# Filter by release type from release names (v0.9.2-stable or v0.9.2-testing)
-MATCHING_PACKAGES=$(echo "$ASSET_NAMES" | grep -E "^kmod-yeetmouse-${YEETMOUSE_SHORT_COMMIT_ESCAPED}-[0-9]+\.fc[0-9]+\.${KERNEL_VERSION_RPM_ESCAPED}\.x86_64\.rpm$" || true)
+# Pattern: kmod-yeetmouse-KERNEL_VERSION-0-PKGREL.TIMESTAMPgSHORTCOMMIT.fc43.x86_64.rpm
+# Filter by release type from release names (v0-stable or v0-testing)
+MATCHING_PACKAGES=$(echo "$ASSET_NAMES" | grep -E "^kmod-yeetmouse-${KERNEL_VERSION_ESCAPED}-0-[0-9]+\.[0-9]{12}g${YEETMOUSE_SHORT_COMMIT_ESCAPED}\.fc[0-9]+\.x86_64\.rpm$" || true)
 
 # Further filter by release type by checking release names
 if [[ -n "$MATCHING_PACKAGES" ]]; then
@@ -153,7 +148,7 @@ if [[ -n "$MATCHING_PACKAGES" ]]; then
   
   if [[ -n "$FILTERED_RELEASES" ]]; then
     # Extract asset names from filtered releases only
-    MATCHING_PACKAGES=$(echo "$RELEASES_JSON" | jq -r ".[] | select(.name | test(\"-${RELEASE_TYPE}$\")) | .assets[].name" | grep -E "^kmod-yeetmouse-${YEETMOUSE_SHORT_COMMIT_ESCAPED}-[0-9]+\.fc[0-9]+\.${KERNEL_VERSION_RPM_ESCAPED}\.x86_64\.rpm$" || true)
+    MATCHING_PACKAGES=$(echo "$RELEASES_JSON" | jq -r ".[] | select(.name | test(\"-${RELEASE_TYPE}$\")) | .assets[].name" | grep -E "^kmod-yeetmouse-${KERNEL_VERSION_ESCAPED}-0-[0-9]+\.[0-9]{12}g${YEETMOUSE_SHORT_COMMIT_ESCAPED}\.fc[0-9]+\.x86_64\.rpm$" || true)
   else
     MATCHING_PACKAGES=""
   fi
@@ -172,9 +167,9 @@ while IFS= read -r pkg; do
 done <<< "$MATCHING_PACKAGES"
 
 # Extract release numbers from matching packages
-# Pattern: kmod-yeetmouse-SHORTCOMMIT-RELEASE.fc43.KERNEL_VERSION_RPM.x86_64.rpm
-# We need to extract RELEASE (the number between SHORTCOMMIT- and .fc43)
-RELEASE_NUMBERS=$(echo "$MATCHING_PACKAGES" | sed -E "s/^kmod-yeetmouse-${YEETMOUSE_SHORT_COMMIT_ESCAPED}-([0-9]+)\.fc[0-9]+\.${KERNEL_VERSION_RPM_ESCAPED}\.x86_64\.rpm$/\1/")
+# Pattern: kmod-yeetmouse-KERNEL_VERSION-0-PKGREL.TIMESTAMPgSHORTCOMMIT.fc43.x86_64.rpm
+# We need to extract PKGREL (the number after -0- and before the timestamp)
+RELEASE_NUMBERS=$(echo "$MATCHING_PACKAGES" | sed -E "s/^kmod-yeetmouse-${KERNEL_VERSION_ESCAPED}-0-([0-9]+)\.[0-9]{12}g${YEETMOUSE_SHORT_COMMIT_ESCAPED}\.fc[0-9]+\.x86_64\.rpm$/\1/")
 
 # Find the highest release number
 MAX_RELEASE=0

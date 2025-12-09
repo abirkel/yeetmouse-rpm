@@ -1,10 +1,11 @@
 %global debug_package %{nil}
 %global commit %{?commit}%{!?commit:99844bbd786d612657d892cac2f663d940fd3d62}
 %global shortcommit %{?shortcommit}%{!?shortcommit:99844bb}
+%global commit_timestamp %{?commit_timestamp}%{!?commit_timestamp:202412091624}
 
 Name:           yeetmouse
-Version:        %{?version}%{!?version:0.9.2}
-Release:        %{?release}%{!?release:1}.git%{shortcommit}%{?dist}
+Version:        0
+Release:        %{?release}%{!?release:1}.%{commit_timestamp}g%{shortcommit}%{?dist}
 Summary:        GUI application for YeetMouse mouse acceleration configuration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse

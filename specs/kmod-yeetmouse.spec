@@ -18,7 +18,7 @@ Summary:        Kernel module for YeetMouse mouse acceleration driver
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
 Source0:        %{url}/archive/%{commit}/YeetMouse-%{commit}.tar.gz
-Source1:        driver/config.h
+Source1:        config.h
 
 # Note: kernel-devel is installed manually in the build workflow
 # before rpmbuild runs, so it's not listed in BuildRequires

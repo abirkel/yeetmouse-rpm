@@ -552,6 +552,10 @@ jobs:
         run: |
           cp specs/*.spec ~/rpmbuild/SPECS/
 
+      - name: Copy custom config.h
+        run: |
+          cp driver/config.h ~/rpmbuild/SOURCES/config.h
+
       - name: Build kmod-yeetmouse
         if: inputs.build_kmod == true
         run: |

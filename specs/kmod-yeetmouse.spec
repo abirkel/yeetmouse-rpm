@@ -10,7 +10,7 @@
 %global shortcommit %{?shortcommit}%{!?shortcommit:99844bb}
 %global commit_timestamp %{?commit_timestamp}%{!?commit_timestamp:202412091624}
 
-Name:           kmod-%{kmod_name}
+Name:           kmod-%{kmod_name}-%{kernel_version}
 Version:        0
 Release:        %{?release}%{!?release:1}.%{commit_timestamp}g%{shortcommit}%{?dist}
 Summary:        Kernel module for YeetMouse mouse acceleration driver
@@ -25,8 +25,11 @@ Source1:        config.h
 BuildRequires:  gcc
 BuildRequires:  make
 
-Provides:       kmod-yeetmouse = %{version}-%{release}
+Provides:       kmod-%{kmod_name} = %{version}-%{release}
 Provides:       %{kmod_name}-kmod = %{version}-%{release}
+Provides:       kernel-modules-for-kernel = %{kernel_version}
+
+Requires:       kernel-uname-r = %{kernel_version}
 
 %description
 Kernel module for the YeetMouse mouse acceleration driver, built for kernel %{kernel_version}.
@@ -34,7 +37,7 @@ Kernel module for the YeetMouse mouse acceleration driver, built for kernel %{ke
 YeetMouse is a mouse acceleration driver for Linux that provides customizable mouse
 acceleration curves and parameters through a kernel module and CLI tool.
 
-This package contains the pre-compiled kernel module for a specific kernel version.
+This package contains the pre-compiled kernel module for kernel %{kernel_version}.
 
 %prep
 %autosetup -n YeetMouse-%{commit}
@@ -72,6 +75,12 @@ if [ $1 -eq 0 ]; then
 fi
 
 %changelog
+* Wed Dec 25 2024 YeetMouse Builder <builder@yeetmouse.local> - 0-1
+- Fix package naming to include kernel version in Name field
+- Add kernel-modules-for-kernel provide for proper rpm-ostree detection
+- Add kernel-uname-r requirement for kernel version matching
+- This fixes rpm-ostree selecting wrong kernel module version
+
 * Wed Nov 20 2024 YeetMouse Builder <builder@yeetmouse.local> - 0.9.2-1
 - Convert from akmod to kmod package for atomic/ostree distros
 - Build for specific kernel version passed via macro

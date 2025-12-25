@@ -601,24 +601,12 @@ jobs:
           fi
 
           echo "✓ Successfully built kmod-yeetmouse"
+          echo "Built packages:"
           ls -lh ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm
-
-          # Rename package with kernel version prefix
-          echo "Renaming package with kernel version prefix..."
-          OLD_NAME=$(ls ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-0-*.rpm)
-          BASENAME=$(basename "$OLD_NAME")
-          # New name: kmod-yeetmouse-KERNEL_VERSION-0-RELEASE.ARCH.rpm
-          NEW_NAME="kmod-yeetmouse-${KERNEL_VERSION}-${BASENAME#kmod-yeetmouse-}"
-          mv "$OLD_NAME" ~/rpmbuild/RPMS/x86_64/"$NEW_NAME"
-          echo "✓ Renamed to: $NEW_NAME"
           
-          # Also rename source RPM
-          if ls ~/rpmbuild/SRPMS/kmod-yeetmouse-0-*.src.rpm 1>/dev/null 2>&1; then
-            OLD_SRPM=$(ls ~/rpmbuild/SRPMS/kmod-yeetmouse-0-*.src.rpm)
-            SRPM_BASENAME=$(basename "$OLD_SRPM")
-            NEW_SRPM="kmod-yeetmouse-${KERNEL_VERSION}-${SRPM_BASENAME#kmod-yeetmouse-}"
-            mv "$OLD_SRPM" ~/rpmbuild/SRPMS/"$NEW_SRPM"
-            echo "✓ Renamed SRPM to: $NEW_SRPM"
+          if ls ~/rpmbuild/SRPMS/kmod-yeetmouse-*.src.rpm 1>/dev/null 2>&1; then
+            echo "Built source RPM:"
+            ls -lh ~/rpmbuild/SRPMS/kmod-yeetmouse-*.src.rpm
           fi
 
           echo "::endgroup::"

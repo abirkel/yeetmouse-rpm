@@ -1,5 +1,5 @@
 // Windows EPP curve with modified Prescale and Sensitivity values
-#define SENSITIVITY 0.7
+#define SENSITIVITY 1.0
 #define SENSITIVITY_Y 1
 #define OUTPUT_CAP 0
 #define INPUT_CAP 0

@@ -176,7 +176,7 @@ jobs:
           echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
 
   resolve-versions:
-    needs: generate-matrix
+    needs: [load-config, generate-matrix]
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}

@@ -330,7 +330,7 @@ jobs:
         run: |
           # Step 1: Install base RPM build tools and git
           dnf install -y rpm-build rpmdevtools rpmlint createrepo_c \
-            rpm-sign gnupg2 pinentry spectool kmodtool curl jq git
+            rpm-sign gnupg2 pinentry spectool kmodtool curl jq git skopeo
 
           # Step 2: Install BuildRequires from spec files
           KERNEL_VERSION="${{ steps.load_version.outputs.kernel_version }}"

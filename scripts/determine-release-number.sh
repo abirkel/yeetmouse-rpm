@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 --yeetmouse-commit <commit> --kernel-version <version> --kernel-type <main|bazzite> [--release-type <stable|testing>] [--repo <owner/repo>]"
+      echo "Usage: $0 --yeetmouse-commit <commit> --kernel-version <version> --kernel-type <main|ogc> [--release-type <stable|testing>] [--repo <owner/repo>]"
       exit 1
       ;;
   esac
@@ -59,8 +59,8 @@ if [[ -z "$KERNEL_TYPE" ]]; then
   exit 1
 fi
 
-if [[ "$KERNEL_TYPE" != "main" && "$KERNEL_TYPE" != "bazzite" ]]; then
-  echo "Error: kernel-type must be 'main' or 'bazzite', got '$KERNEL_TYPE'"
+if [[ "$KERNEL_TYPE" != "main" && "$KERNEL_TYPE" != "ogc" ]]; then
+  echo "Error: kernel-type must be 'main' or 'ogc', got '$KERNEL_TYPE'"
   exit 1
 fi
 

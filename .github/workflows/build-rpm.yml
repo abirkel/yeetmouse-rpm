@@ -6,8 +6,8 @@ name: Build and Publish RPM Packages
     inputs:
       kernel_types:
         description: >-
-          Kernel types to build (comma-separated: main, bazzite,
-          or main,bazzite)
+          Kernel types to build (comma-separated: main, ogc,
+          or main,ogc)
         required: false
         type: string
         default: 'main'
@@ -56,8 +56,8 @@ name: Build and Publish RPM Packages
     inputs:
       kernel_types:
         description: >-
-          Kernel types to build (comma-separated: main, bazzite,
-          or main,bazzite)
+          Kernel types to build (comma-separated: main, ogc,
+          or main,ogc)
         required: false
         type: string
         default: 'main'
@@ -246,12 +246,25 @@ jobs:
               exit 1
             fi
           else
-            if ! KERNEL_VERSION=$(./scripts/resolve-kernel-version.sh \
-              --kernel-type "$KERNEL_TYPE"); then
-              echo "::endgroup::"
-              echo "::error::Failed to resolve kernel version"
-              echo "::error::Kernel type: $KERNEL_TYPE"
-              exit 1
+            # For ogc kernel type, pass --fedora-version from build config
+            if [ "$KERNEL_TYPE" = "ogc" ]; then
+              FEDORA_VER="${{ needs.load-config.outputs.container_version }}"
+              if ! KERNEL_VERSION=$(./scripts/resolve-kernel-version.sh \
+                --kernel-type "$KERNEL_TYPE" \
+                --fedora-version "$FEDORA_VER"); then
+                echo "::endgroup::"
+                echo "::error::Failed to resolve OGC kernel version"
+                echo "::error::Fedora version: $FEDORA_VER"
+                exit 1
+              fi
+            else
+              if ! KERNEL_VERSION=$(./scripts/resolve-kernel-version.sh \
+                --kernel-type "$KERNEL_TYPE"); then
+                echo "::endgroup::"
+                echo "::error::Failed to resolve kernel version"
+                echo "::error::Kernel type: $KERNEL_TYPE"
+                exit 1
+              fi
             fi
           fi
 
@@ -363,8 +376,8 @@ jobs:
             echo "::error::Kernel version not available in repository"
             echo "::error::For main kernel: Check"
             echo "::error::https://kojipkgs.fedoraproject.org/packages/kernel/"
-            echo "::error::For bazzite kernel: Check"
-            echo "::error::github.com/bazzite-org/kernel-bazzite/releases"
+            echo "::error::For ogc kernel: Check"
+            echo "::error::ghcr.io/opengamingcollective/kernel-packages-fedora"
             exit 1
           fi
           echo "::endgroup::"
@@ -807,7 +820,7 @@ jobs:
             echo "**Kernel Types:** $KERNEL_TYPES"
             echo "**Release Type:** $RELEASE_TYPE"
             echo ""
-            echo "> **Note:** The kmod packages are built for specific kernel versions. Install the package matching your kernel type (main for Aurora, bazzite for Bazzite)."
+            echo "> **Note:** The kmod packages are built for specific kernel versions. Install the package matching your kernel type (main for Aurora, ogc for OGC/Bazzite)."
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
@@ -876,9 +889,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RPM_REPO_DISPATCH_TOKEN }}
 
-  publish-to-repo-bazzite:
+  publish-to-repo-ogc:
     needs: [build-rpm, resolve-versions, load-config]
-    if: contains(inputs.kernel_types, 'bazzite')
+    if: contains(inputs.kernel_types, 'ogc')
     runs-on: ubuntu-latest
     steps:
       - name: Trigger rpm-repo signing and publishing
@@ -887,7 +900,7 @@ jobs:
             --repo abirkel/rpm-repo \
             -f builder_repo=${{ github.repository }} \
             -f run_id=${{ github.run_id }} \
-            -f artifact_name=rpm-packages-bazzite \
+            -f artifact_name=rpm-packages-ogc \
             -f distro=fedora \
             -f release=${{ needs.load-config.outputs.container_version }} \
             -f arch=x86_64 \

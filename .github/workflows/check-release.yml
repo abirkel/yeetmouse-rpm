@@ -22,6 +22,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y skopeo jq
 
+      - name: Load build config
+        id: load_config
+        run: |
+          source build.conf
+          echo "fedora_version=$CONTAINER_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Fedora version: $CONTAINER_VERSION"
+
       - name: Get latest YeetMouse commit
         id: get_yeetmouse
         run: |
@@ -42,14 +49,16 @@ jobs:
           echo "kernel_version=$AURORA_KERNEL" >> "$GITHUB_OUTPUT"
           echo "Aurora kernel version: $AURORA_KERNEL"
 
-      - name: Get Bazzite kernel version
-        id: get_bazzite_kernel
+      - name: Get OGC kernel version
+        id: get_ogc_kernel
         run: |
-          BAZZITE_KERNEL=$(
-            ./scripts/resolve-kernel-version.sh --kernel-type bazzite
+          OGC_KERNEL=$(
+            ./scripts/resolve-kernel-version.sh \
+              --kernel-type ogc \
+              --fedora-version ${{ steps.load_config.outputs.fedora_version }}
           )
-          echo "kernel_version=$BAZZITE_KERNEL" >> "$GITHUB_OUTPUT"
-          echo "Bazzite kernel version: $BAZZITE_KERNEL"
+          echo "kernel_version=$OGC_KERNEL" >> "$GITHUB_OUTPUT"
+          echo "OGC kernel version: $OGC_KERNEL"
 
       - name: Load current versions
         id: load_versions
@@ -60,12 +69,12 @@ jobs:
               >> "$GITHUB_OUTPUT"
             echo "aurora_kernel_version=${AURORA_KERNEL_VERSION:-}" \
               >> "$GITHUB_OUTPUT"
-            echo "bazzite_kernel_version=${BAZZITE_KERNEL_VERSION:-}" \
+            echo "ogc_kernel_version=${OGC_KERNEL_VERSION:-}" \
               >> "$GITHUB_OUTPUT"
           else
             echo "yeetmouse_commit=" >> "$GITHUB_OUTPUT"
             echo "aurora_kernel_version=" >> "$GITHUB_OUTPUT"
-            echo "bazzite_kernel_version=" >> "$GITHUB_OUTPUT"
+            echo "ogc_kernel_version=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Compare versions and determine build targets
@@ -83,22 +92,22 @@ jobs:
             steps.load_versions.outputs.aurora_kernel_version
           }}"
 
-          LATEST_BAZZITE="${{
-            steps.get_bazzite_kernel.outputs.kernel_version
+          LATEST_OGC="${{
+            steps.get_ogc_kernel.outputs.kernel_version
           }}"
-          CURRENT_BAZZITE="${{
-            steps.load_versions.outputs.bazzite_kernel_version
+          CURRENT_OGC="${{
+            steps.load_versions.outputs.ogc_kernel_version
           }}"
 
           echo "=== Version Comparison ==="
           echo "YeetMouse: $CURRENT_YEETMOUSE -> $LATEST_YEETMOUSE"
           echo "Aurora:    $CURRENT_AURORA -> $LATEST_AURORA"
-          echo "Bazzite:   $CURRENT_BAZZITE -> $LATEST_BAZZITE"
+          echo "OGC:       $CURRENT_OGC -> $LATEST_OGC"
 
           # Determine what changed
           YEETMOUSE_CHANGED=false
           AURORA_CHANGED=false
-          BAZZITE_CHANGED=false
+          OGC_CHANGED=false
 
           if [ "$LATEST_YEETMOUSE" != "$CURRENT_YEETMOUSE" ]; then
             YEETMOUSE_CHANGED=true
@@ -110,9 +119,9 @@ jobs:
             echo "✓ Aurora kernel version changed"
           fi
 
-          if [ "$LATEST_BAZZITE" != "$CURRENT_BAZZITE" ]; then
-            BAZZITE_CHANGED=true
-            echo "✓ Bazzite kernel version changed"
+          if [ "$LATEST_OGC" != "$CURRENT_OGC" ]; then
+            OGC_CHANGED=true
+            echo "✓ OGC kernel version changed"
           fi
 
           # Determine which kernel types need building
@@ -122,7 +131,7 @@ jobs:
 
           if [ "$YEETMOUSE_CHANGED" = true ]; then
             # New YeetMouse commit: build for both kernel types
-            KERNEL_TYPES="main,bazzite"
+            KERNEL_TYPES="main,ogc"
             BUILD_CLI=true
             NEEDS_BUILD=true
             echo "→ Building for both kernel types (new YeetMouse commit)"
@@ -134,14 +143,14 @@ jobs:
               echo "→ Building for main kernel (Aurora changed)"
             fi
 
-            if [ "$BAZZITE_CHANGED" = true ]; then
+            if [ "$OGC_CHANGED" = true ]; then
               if [ -n "$KERNEL_TYPES" ]; then
-                KERNEL_TYPES="$KERNEL_TYPES,bazzite"
+                KERNEL_TYPES="$KERNEL_TYPES,ogc"
               else
-                KERNEL_TYPES="bazzite"
+                KERNEL_TYPES="ogc"
               fi
               NEEDS_BUILD=true
-              echo "→ Building for bazzite kernel (Bazzite changed)"
+              echo "→ Building for ogc kernel (OGC changed)"
             fi
           fi
 
@@ -151,7 +160,7 @@ jobs:
           echo "build_cli=$BUILD_CLI" >> "$GITHUB_OUTPUT"
           echo "yeetmouse_commit=$LATEST_YEETMOUSE" >> "$GITHUB_OUTPUT"
           echo "aurora_kernel=$LATEST_AURORA" >> "$GITHUB_OUTPUT"
-          echo "bazzite_kernel=$LATEST_BAZZITE" >> "$GITHUB_OUTPUT"
+          echo "ogc_kernel=$LATEST_OGC" >> "$GITHUB_OUTPUT"
 
           echo ""
           if [ "$NEEDS_BUILD" = true ]; then
@@ -172,14 +181,14 @@ jobs:
           AURORA_KERNEL_VERSION="${{
             steps.check_changes.outputs.aurora_kernel
           }}"
-          BAZZITE_KERNEL_VERSION="${{
-            steps.check_changes.outputs.bazzite_kernel
+          OGC_KERNEL_VERSION="${{
+            steps.check_changes.outputs.ogc_kernel
           }}"
 
           cat > .external_versions << EOF
           YEETMOUSE_COMMIT=$YEETMOUSE_COMMIT
           AURORA_KERNEL_VERSION=$AURORA_KERNEL_VERSION
-          BAZZITE_KERNEL_VERSION=$BAZZITE_KERNEL_VERSION
+          OGC_KERNEL_VERSION=$OGC_KERNEL_VERSION
           EOF
 
           git config user.name "github-actions[bot]"
@@ -189,7 +198,7 @@ jobs:
           COMMIT_MSG="chore: update versions"
           COMMIT_MSG="$COMMIT_MSG - yeetmouse: $YEETMOUSE_COMMIT"
           COMMIT_MSG="$COMMIT_MSG, aurora: $AURORA_KERNEL_VERSION"
-          COMMIT_MSG="$COMMIT_MSG, bazzite: $BAZZITE_KERNEL_VERSION"
+          COMMIT_MSG="$COMMIT_MSG, ogc: $OGC_KERNEL_VERSION"
           git commit -m "$COMMIT_MSG" && git push
 
       - name: Trigger RPM build workflow

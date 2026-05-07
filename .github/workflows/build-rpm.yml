@@ -570,6 +570,7 @@ jobs:
           cp config.h ~/rpmbuild/SOURCES/config.h
           cp yeetmouse.conf ~/rpmbuild/SOURCES/yeetmouse.conf
           cp yeetmouse.service ~/rpmbuild/SOURCES/yeetmouse.service
+          cp yeetmouse-preset.conf ~/rpmbuild/SOURCES/yeetmouse-preset.conf
 
       - name: Build kmod-yeetmouse
         if: inputs.build_kmod == true

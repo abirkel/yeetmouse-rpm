@@ -11,6 +11,7 @@ License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
 Source0:        %{url}/archive/%{commit}/YeetMouse-%{commit}.tar.gz
 Source1:        yeetmouse.service
+Source2:        yeetmouse-preset.conf
 
 BuildRequires:  gcc-c++
 BuildRequires:  make
@@ -53,6 +54,11 @@ install -D -m 755 gui/YeetMouseGui \
 install -D -m 644 %{SOURCE1} \
     %{buildroot}%{_unitdir}/yeetmouse.service
 
+# Install systemd preset so the service is enabled by default
+# (required for rpm-ostree/atomic systems where scriptlets don't run)
+install -D -m 644 %{SOURCE2} \
+    %{buildroot}%{_prefix}/lib/systemd/system-preset/50-yeetmouse.preset
+
 %post
 %systemd_post yeetmouse.service
 
@@ -66,8 +72,12 @@ install -D -m 644 %{SOURCE1} \
 %{_bindir}/yeetmousectl
 %{_bindir}/yeetmouse-gui
 %{_unitdir}/yeetmouse.service
+%{_prefix}/lib/systemd/system-preset/50-yeetmouse.preset
 
 %changelog
+* Thu May 07 2026 YeetMouse Builder <builder@yeetmouse.local> - 0-2
+- Ship 50-yeetmouse.preset so service auto-enables on rpm-ostree/atomic installs
+
 * Thu May 07 2026 YeetMouse Builder <builder@yeetmouse.local> - 0-1
 - Add yeetmousectl CLI tool (required for runtime config apply)
 - Add yeetmouse.service systemd unit (applies /etc/yeetmouse.conf at boot)

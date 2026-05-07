@@ -19,6 +19,7 @@ License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
 Source0:        %{url}/archive/%{commit}/YeetMouse-%{commit}.tar.gz
 Source1:        config.h
+Source2:        yeetmouse.conf
 
 # Note: kernel-devel is installed manually in the build workflow
 # before rpmbuild runs, so it's not listed in BuildRequires
@@ -30,6 +31,7 @@ Provides:       %{kmod_name}-kmod = %{version}-%{release}
 Provides:       kernel-modules-for-kernel = %{kernel_version}
 
 Requires:       kernel-uname-r = %{kernel_version}
+Requires:       yeetmouse
 
 %description
 Kernel module for the YeetMouse mouse acceleration driver, built for kernel %{kernel_version}.
@@ -38,12 +40,14 @@ YeetMouse is a mouse acceleration driver for Linux that provides customizable mo
 acceleration curves and parameters through a kernel module and CLI tool.
 
 This package contains the pre-compiled kernel module for kernel %{kernel_version}.
+Settings are applied at boot via yeetmouse.service using /etc/yeetmouse.conf.
 
 %prep
 %autosetup -n YeetMouse-%{commit}
 
 %build
-# Use custom config.h from Source1
+# Use custom config.h from Source1 (sets compile-time defaults only;
+# runtime settings are applied from /etc/yeetmouse.conf via yeetmousectl)
 cp %{SOURCE1} driver/config.h
 
 # Build the kernel module for the specified kernel version
@@ -57,8 +61,13 @@ make V=1 %{?_smp_mflags} \
 install -D -m 644 driver/%{kmod_name}.ko \
     %{buildroot}/usr/lib/modules/%{kernel_version}/extra/%{kmod_name}/%{kmod_name}.ko
 
+# Install runtime configuration (noreplace: upgrades preserve user edits)
+install -D -m 644 %{SOURCE2} \
+    %{buildroot}/etc/yeetmouse.conf
+
 %files
 /usr/lib/modules/%{kernel_version}/extra/%{kmod_name}/%{kmod_name}.ko
+%config(noreplace) /etc/yeetmouse.conf
 
 %post
 # Run depmod to update module dependencies
@@ -75,6 +84,11 @@ if [ $1 -eq 0 ]; then
 fi
 
 %changelog
+* Thu May 07 2026 YeetMouse Builder <builder@yeetmouse.local> - 0-1
+- Add /etc/yeetmouse.conf (runtime config, noreplace) translated from config.h
+- Add Requires: yeetmouse to ensure yeetmousectl and yeetmouse.service are present
+- Settings now applied at runtime via yeetmousectl instead of compile-time config.h
+
 * Wed Dec 25 2024 YeetMouse Builder <builder@yeetmouse.local> - 0-1
 - Fix package naming to include kernel version in Name field
 - Add kernel-modules-for-kernel provide for proper rpm-ostree detection

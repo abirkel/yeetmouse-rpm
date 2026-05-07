@@ -565,9 +565,11 @@ jobs:
         run: |
           cp specs/*.spec ~/rpmbuild/SPECS/
 
-      - name: Copy custom config.h
+      - name: Copy source files to SOURCES
         run: |
           cp config.h ~/rpmbuild/SOURCES/config.h
+          cp yeetmouse.conf ~/rpmbuild/SOURCES/yeetmouse.conf
+          cp yeetmouse.service ~/rpmbuild/SOURCES/yeetmouse.service
 
       - name: Build kmod-yeetmouse
         if: inputs.build_kmod == true

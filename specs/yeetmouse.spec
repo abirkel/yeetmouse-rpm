@@ -12,6 +12,7 @@ URL:            https://github.com/AndyFilter/YeetMouse
 Source0:        %{url}/archive/%{commit}/YeetMouse-%{commit}.tar.gz
 Source1:        yeetmouse.service
 Source2:        yeetmouse-preset.conf
+Source3:        yeetmouse-sysusers.conf
 
 BuildRequires:  gcc-c++
 BuildRequires:  make
@@ -22,6 +23,7 @@ BuildRequires:  systemd-rpm-macros
 Requires:       glfw
 Requires:       mesa-libGL
 %{?systemd_requires}
+%{?sysusers_requires_compat}
 
 %description
 Userspace components for the YeetMouse mouse acceleration driver.
@@ -59,6 +61,15 @@ install -D -m 644 %{SOURCE1} \
 install -D -m 644 %{SOURCE2} \
     %{buildroot}%{_prefix}/lib/systemd/system-preset/50-yeetmouse.preset
 
+# Install the sysusers.d snippet that creates the 'yeetmouse' group. yeetmouse.service
+# chowns the module's sysfs parameters to it, so without the group the unit fails on
+# every boot with "chown: invalid group".
+install -D -m 644 %{SOURCE3} \
+    %{buildroot}%{_sysusersdir}/yeetmouse.conf
+
+%pre
+%sysusers_create_compat %{SOURCE3}
+
 %post
 %systemd_post yeetmouse.service
 
@@ -73,8 +84,15 @@ install -D -m 644 %{SOURCE2} \
 %{_bindir}/yeetmouse-gui
 %{_unitdir}/yeetmouse.service
 %{_prefix}/lib/systemd/system-preset/50-yeetmouse.preset
+%{_sysusersdir}/yeetmouse.conf
 
 %changelog
+* Mon Aug 31 2026 abirkel - 0-3
+- Create the 'yeetmouse' group via sysusers.d. yeetmouse.service chowns
+  /sys/module/yeetmouse/parameters/* to it, but the package never created it, so the
+  unit failed on every boot with "chown: invalid group: 'root:yeetmouse'" and no mouse
+  configuration was ever applied.
+
 * Thu May 07 2026 YeetMouse Builder <builder@yeetmouse.local> - 0-2
 - Ship 50-yeetmouse.preset so service auto-enables on rpm-ostree/atomic installs
 

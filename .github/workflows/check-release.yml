@@ -3,8 +3,12 @@ name: Check Upstream Versions
 
 'on':
   schedule:
-    # Build at 06:00 UTC every day (20 min after ublue images start building)
-    - cron: '0 6 * * *'
+    # ~06:00 UTC every day (20 min after ublue images start building). Off the exact
+    # hour on purpose: GitHub Actions' scheduler is congested at :00, and cron jobs
+    # pinned there have been observed drifting hours late (checked 2026-08-27 onward,
+    # sometimes 09:00-18:00 UTC instead of ~06:30). A few minutes off the hour spreads
+    # this run across less-contended scheduler slots.
+    - cron: '17 6 * * *'
   workflow_dispatch:
 
 jobs:

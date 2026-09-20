@@ -3,12 +3,16 @@ name: Check Upstream Versions
 
 'on':
   schedule:
-    # ~06:00 UTC every day (20 min after ublue images start building). Off the exact
-    # hour on purpose: GitHub Actions' scheduler is congested at :00, and cron jobs
-    # pinned there have been observed drifting hours late (checked 2026-08-27 onward,
-    # sometimes 09:00-18:00 UTC instead of ~06:30). A few minutes off the hour spreads
-    # this run across less-contended scheduler slots.
-    - cron: '17 6 * * *'
+    # ~05:00 UTC every day. Re-anchored 2026-09-20 as the first link in a chain
+    # targeting fresh vespera :latest by 18:00 JST: yeetmouse ~05:00 UTC -> vespera
+    # build.yml daily build 06:03 UTC -> vespera promote.yml weekly floor 08:03 UTC
+    # Tue (see abirkel/vespera PR #97). Off the exact hour on purpose: GitHub
+    # Actions' scheduler is congested at :00, and cron jobs pinned there have been
+    # observed drifting hours late (checked 2026-08-27 onward, sometimes 09:00-18:00
+    # UTC instead of ~06:30 under the old 06:17 UTC cron -- confirmed still drifting
+    # 09:14-12:43 UTC over the 9 days before this change, so this reorder fixes
+    # relative timing/margin against vespera's build, not the drift itself).
+    - cron: '3 5 * * *'
   workflow_dispatch:
 
 jobs:

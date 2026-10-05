@@ -1,14 +1,13 @@
 # YeetMouse RPM Packaging
 
 [![Latest Release](https://img.shields.io/github/v/release/abirkel/yeetmouse-rpm?label=Latest%20Release&color=blue)](https://github.com/abirkel/yeetmouse-rpm/releases/latest)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/abirkel/yeetmouse-rpm/build-rpm.yml?branch=main&label=Build)](https://github.com/abirkel/yeetmouse-rpm/actions/workflows/build-rpm.yml)
 [![Platform](https://img.shields.io/badge/Platform-Fedora%20%7C%20RPM-294172?logo=fedora)](https://github.com/abirkel/yeetmouse-rpm)
 
 RPM packages for the [YeetMouse](https://github.com/AndyFilter/YeetMouse) mouse acceleration driver for Fedora and RPM-based Linux distributions.
 
 ## Overview
 
-This repository provides automated RPM packaging for YeetMouse, a customizable mouse acceleration driver consisting of a kernel module and GUI configuration tool. Packages are built automatically via GitHub Actions when new YeetMouse commits are detected.
+This repository provides automated RPM packaging for YeetMouse, a customizable mouse acceleration driver consisting of a kernel module and GUI configuration tool. Packages are built via [COPR](https://copr.fedorainfracloud.org/) and published to a GPG-signed repository.
 
 ## Packages
 
@@ -27,8 +26,8 @@ Add the yeetmouse repository to your system:
 
 ```bash
 # Download and install the repository configuration
-sudo curl -L https://raw.githubusercontent.com/abirkel/yeetmouse-rpm/main/yeetmouse.repo \
-  -o /etc/yum.repos.d/yeetmouse.repo
+sudo curl -L https://abirkel.github.io/rpm-repo/abirkel-stable.repo \
+  -o /etc/yum.repos.d/abirkel-stable.repo
 ```
 
 The GPG public key will be automatically imported when you first install a package from this repository.
@@ -99,14 +98,7 @@ For additional help, see the [upstream YeetMouse issues](https://github.com/Andy
 
 ## Automated Builds
 
-This repository automatically builds and publishes RPM packages when:
-- New YeetMouse commits are detected
-- Aurora kernel version changes
-- Bazzite kernel version changes
-
-The workflow monitors both Aurora and Bazzite images daily and builds kmod packages for the appropriate kernel types. Packages are deployed to the GitHub Pages repository.
-
-For detailed information about the build workflow architecture, kernel types, manual build options, and configuration, see the [Workflows Guide](WORKFLOWS.md).
+This repository builds and publishes RPM packages via [COPR](https://copr.fedorainfracloud.org/), using `kmodtool` to generate per-kernel-version subpackages. Packages are published to the signed repository at [abirkel.github.io/rpm-repo](https://abirkel.github.io/rpm-repo/).
 
 ## Building Locally
 

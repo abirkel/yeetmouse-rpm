@@ -59,7 +59,7 @@ ls -l /sys/module/yeetmouse/parameters/
 **Solutions**:
 ```bash
 # Verify repository is configured
-cat /etc/yum.repos.d/yeetmouse.repo
+cat /etc/yum.repos.d/abirkel-stable.repo
 
 # Check repository is enabled
 sudo dnf repolist | grep yeetmouse
@@ -237,7 +237,7 @@ sudo modprobe -r yeetmouse
 sudo dnf remove akmod-yeetmouse kmod-yeetmouse yeetmouse-gui
 
 # Remove repository configuration (optional)
-sudo rm /etc/yum.repos.d/yeetmouse.repo
+sudo rm /etc/yum.repos.d/abirkel-stable.repo
 
 # Clean up any remaining files
 sudo rm -rf /usr/src/akmods/yeetmouse-kmod-*
@@ -261,4 +261,3 @@ If you encounter problems not covered here:
 
 - [YeetMouse Documentation](https://github.com/AndyFilter/YeetMouse#readme)
 - [Building Guide](BUILDING.md) - For local development and testing
-- [Workflows Guide](WORKFLOWS.md) - For understanding the build process

@@ -2,27 +2,9 @@
 
 This guide covers how to build the YeetMouse RPM packages locally on your system.
 
-## Container Requirements (GitHub Actions)
+## Container Requirements (COPR)
 
-The automated build workflows use containers to ensure consistent builds. The workflow dynamically fetches kernel-devel packages based on the kernel type being built.
-
-### Kernel-devel Package Sources
-
-**Main kernel type**:
-- Downloads kernel-devel from Fedora Koji repositories
-- URL: `https://kojipkgs.fedoraproject.org/packages/kernel/`
-- Used for Aurora and standard Fedora distributions
-
-**Bazzite kernel type**:
-- Downloads kernel-devel from Bazzite kernel repository
-- Used for Bazzite gaming distribution
-
-### Container Image Selection
-
-The container image should have basic build tools installed. The workflow installs kernel-devel packages dynamically during the build process.
-
-**Recommended images**:
-- `ghcr.io/ublue-os/aurora:latest` - Aurora base image
+Builds run in COPR's `fedora-44-x86_64` chroot, which provisions `kmodtool` and `kernel-devel` automatically. `kmodtool` resolves kernel-devel's installed version at spec-parse time via `rpm -q`, so no manual kernel-devel pre-install step or container selection is needed the way the old GitHub Actions pipeline required.
 - `quay.io/fedora/fedora:latest` - Standard Fedora
 - `fedora:43` - Specific Fedora version
 
@@ -241,26 +223,9 @@ rpmbuild --define "kernel_version ${KERNEL_VERSION}" \
 sudo dnf install ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*$(uname -r)*.rpm
 ```
 
-## GitHub Actions Secrets
+## Package Signing
 
-The automated build workflow requires the following secrets to be configured in your GitHub repository settings:
-
-### Required Secrets
-
-- **`GPG_PRIVATE_KEY`**: Base64-encoded GPG private key for signing RPM packages
-  - Generate with: `gpg --export-secret-key --armor <KEY_ID> | base64 -w0`
-  - Store the base64 output as this secret
-
-- **`GPG_PASSPHRASE`**: Passphrase for the GPG private key
-
-- **`GPG_KEY_ID`**: The GPG key ID used for signing (e.g., `1234567890ABCDEF`)
-
-### Setting Up Secrets
-
-1. Go to your repository on GitHub
-2. Navigate to **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret**
-4. Add each secret with the name and value listed above
+COPR signs published packages with its own per-project GPG key; there are no repository secrets to configure. The signing key is published automatically alongside the repository and imported on first install.
 
 ### Verifying Signed Packages
 

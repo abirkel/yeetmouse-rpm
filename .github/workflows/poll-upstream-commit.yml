@@ -63,7 +63,22 @@ jobs:
           done
           sed -i -E "s/^YEETMOUSE_COMMIT=.*/YEETMOUSE_COMMIT=${new_sha}/" .external_versions
 
+      - name: Record pre-push COPR build baselines
+        id: baseline
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          # Newest existing build id per package, taken BEFORE pushing, so the
+          # watcher can only ever pick up a build the webhook queued for our push.
+          for pkg in kmod-yeetmouse yeetmouse yeetmouse-gui; do
+            id=$(python3 .github/scripts/copr_build.py latest-id "$pkg")
+            echo "${pkg//-/_}=${id}" >> "$GITHUB_OUTPUT"
+          done
+        env:
+          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+
       - name: Commit and push
+        id: push
         if: steps.compare.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
@@ -71,33 +86,18 @@ jobs:
           git add specs/kmod-yeetmouse.spec specs/yeetmouse.spec specs/yeetmouse-gui.spec .external_versions
           git commit -m "chore: update yeetmouse commit pin to ${{ steps.upstream.outputs.sha }}"
           git push origin HEAD:main
+          sha=$(git rev-parse HEAD)
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for Copr webhook build and report result
+      - name: Wait for Copr webhook builds and report result
         if: steps.compare.outputs.changed == 'true'
         run: |
-          sleep 30
-          for pkg in kmod-yeetmouse yeetmouse yeetmouse-gui; do
-            build_id=$(curl -s --user "${COPR_LOGIN}:${COPR_TOKEN}" \
-              "${COPR_URL}/api_3/build/list?ownername=${COPR_OWNER}&projectname=${COPR_PROJECT}&packagename=${pkg}&limit=1" \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['items'][0]['id'] if d['items'] else '')")
-            if [ -z "$build_id" ]; then
-              echo "::warning::No build found yet for ${pkg}, skipping wait"
-              continue
-            fi
-            echo "Watching ${pkg} build ${build_id}"
-            for i in $(seq 1 60); do
-              state=$(curl -s --user "${COPR_LOGIN}:${COPR_TOKEN}" "${COPR_URL}/api_3/build/${build_id}" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
-              echo "  [$i] ${pkg} build ${build_id}: ${state}"
-              case "$state" in
-                succeeded) break ;;
-                failed|canceled)
-                  echo "::error::${pkg} build ${build_id} ended in state ${state}: ${COPR_URL}/coprs/build/${build_id}/"
-                  exit 1
-                  ;;
-              esac
-              sleep 60
-            done
-          done
+          # One shared deadline for all three packages; every package is reported
+          # before the step fails. Builds are matched to this push's commit SHA.
+          python3 .github/scripts/copr_build.py wait "${{ steps.push.outputs.sha }}" \
+            "kmod-yeetmouse=${{ steps.baseline.outputs.kmod_yeetmouse }}" \
+            "yeetmouse=${{ steps.baseline.outputs.yeetmouse }}" \
+            "yeetmouse-gui=${{ steps.baseline.outputs.yeetmouse_gui }}"
         env:
           COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
           COPR_TOKEN: ${{ secrets.COPR_TOKEN }}

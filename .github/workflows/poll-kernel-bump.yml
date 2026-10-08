@@ -65,94 +65,65 @@ jobs:
       - name: Check whether a kmod-yeetmouse build already exists for this kernel
         id: existing
         run: |
-          found=false
-          page=0
-          while :; do
-            offset=$((page * 100))
-            resp=$(curl -s --user "${COPR_LOGIN}:${COPR_TOKEN}" \
-              "${COPR_URL}/api_3/build/list?ownername=${COPR_OWNER}&projectname=${COPR_PROJECT}&packagename=kmod-yeetmouse&status=succeeded&limit=100&offset=${offset}")
-            count=$(echo "$resp" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['items']))")
-            if [ "$count" = "0" ]; then
-              break
-            fi
-            # source_package.name/.version on the build-list response are the COPR
-            # PACKAGE's own name/version (e.g. "kmod-yeetmouse" / "0"), NOT the kernel
-            # version -- confirmed against Copr's real APIv3 schema (source_package has
-            # only {name, version, url}). The kernel-devel NVR actually built is only
-            # visible in the built RPM's own NEVRA, via the build-chroot "built packages"
-            # endpoint, where the kmodtool-generated subpackage name is literally
-            # "kmod-yeetmouse-<kernel-version>" (confirmed from this session's own real
-            # build: kmod-yeetmouse-7.2.8-200.fc44.x86_64). Check each candidate build's
-            # chroot for a built package whose name contains our target kernel NVR.
-            ids=$(echo "$resp" | python3 -c "import sys,json; print(' '.join(str(i['id']) for i in json.load(sys.stdin)['items']))")
-            for bid in $ids; do
-              pkgs=$(curl -s --user "${COPR_LOGIN}:${COPR_TOKEN}" \
-                "${COPR_URL}/api_3/build-chroot/built-packages?build_id=${bid}&chrootname=${COPR_CHROOT}")
-              if echo "$pkgs" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-nvr = '${{ steps.kernel.outputs.nvr }}'
-pkgs = d.get('packages', d) if isinstance(d, dict) else d
-# response shape not fully confirmed from docs alone; handle both a bare list
-# and a {chrootname: [pkgs]} dict defensively
-if isinstance(pkgs, dict):
-    pkgs = [p for lst in pkgs.values() for p in lst]
-for p in pkgs:
-    name = p.get('name', '') if isinstance(p, dict) else ''
-    if nvr in name:
-        sys.exit(0)
-sys.exit(1)
-" 2>/dev/null; then
-                found=true
-                break 2
-              fi
-            done
-            page=$((page + 1))
-            if [ "$page" -gt 20 ]; then
-              break
-            fi
-          done
+          # API errors fail this step (non-zero exit), so an outage is never
+          # misread as "no build exists" and never triggers a spurious rebuild.
+          found=$(python3 .github/scripts/copr_build.py has-kernel-build "${{ steps.kernel.outputs.nvr }}" "${COPR_CHROOT}")
           echo "found=${found}" >> "$GITHUB_OUTPUT"
         env:
           COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
           COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
 
-      - name: Record kernel version and trigger rebuild via commit
+      - name: Record pre-push COPR build baselines
+        id: baseline
         if: steps.existing.outputs.found == 'false'
         run: |
-          sed -i -E "s/^FEDORA_KERNEL_DEVEL_NVR=.*/FEDORA_KERNEL_DEVEL_NVR=${{ steps.kernel.outputs.nvr }}/" .external_versions || true
+          # COPR's GitHub webhook rebuilds EVERY webhook-enabled package on any
+          # push (no changed-path filtering), so this .external_versions-only
+          # commit also rebuilds yeetmouse and yeetmouse-gui. Baseline and watch
+          # all three, so a failure in any of them fails this run.
+          # Assign first, then echo: inside `echo "x=$(cmd)"` a failing cmd is
+          # masked by echo's own success, which would push with an empty baseline.
+          for pkg in kmod-yeetmouse yeetmouse yeetmouse-gui; do
+            id=$(python3 .github/scripts/copr_build.py latest-id "$pkg")
+            echo "${pkg//-/_}=${id}" >> "$GITHUB_OUTPUT"
+          done
+        env:
+          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+
+      - name: Record kernel version and trigger rebuild via commit
+        id: push
+        if: steps.existing.outputs.found == 'false'
+        run: |
+          nvr="${{ steps.kernel.outputs.nvr }}"
+          stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # KMOD_REBUILD_TRIGGERED changes on every trigger, so the commit is never
+          # empty. Without it, a kernel NVR that is already recorded but has no
+          # successful build (first run on a new project, or a retry after a failed
+          # kmod build) produced "nothing to commit" and could never retrigger.
+          # A build that keeps failing therefore retriggers every 12 hours, and each
+          # attempt fails this run, which is what sends the failure email.
+          sed -i -E "s/^FEDORA_KERNEL_DEVEL_NVR=.*/FEDORA_KERNEL_DEVEL_NVR=${nvr}/" .external_versions
+          if grep -q '^KMOD_REBUILD_TRIGGERED=' .external_versions; then
+            sed -i -E "s/^KMOD_REBUILD_TRIGGERED=.*/KMOD_REBUILD_TRIGGERED=${stamp}/" .external_versions
+          else
+            echo "KMOD_REBUILD_TRIGGERED=${stamp}" >> .external_versions
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .external_versions
-          git commit -m "chore: trigger kmod-yeetmouse rebuild for kernel-devel ${{ steps.kernel.outputs.nvr }}"
+          git commit -m "chore: trigger kmod-yeetmouse rebuild for kernel-devel ${nvr}"
           git push origin HEAD:main
+          sha=$(git rev-parse HEAD)
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for Copr webhook build and report result
+      - name: Wait for Copr webhook builds and report result
         if: steps.existing.outputs.found == 'false'
         run: |
-          sleep 30
-          build_id=$(curl -s --user "${COPR_LOGIN}:${COPR_TOKEN}" \
-            "${COPR_URL}/api_3/build/list?ownername=${COPR_OWNER}&projectname=${COPR_PROJECT}&packagename=kmod-yeetmouse&limit=1" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['items'][0]['id'] if d['items'] else '')")
-          if [ -z "$build_id" ]; then
-            echo "::error::No build was triggered after push"
-            exit 1
-          fi
-          echo "Watching kmod-yeetmouse build ${build_id}"
-          for i in $(seq 1 60); do
-            state=$(curl -s --user "${COPR_LOGIN}:${COPR_TOKEN}" "${COPR_URL}/api_3/build/${build_id}" | python3 -c "import sys,json; print(json.load(sys.stdin)['state'])")
-            echo "  [$i] kmod-yeetmouse build ${build_id}: ${state}"
-            case "$state" in
-              succeeded) exit 0 ;;
-              failed|canceled)
-                echo "::error::kmod-yeetmouse build ${build_id} ended in state ${state}: ${COPR_URL}/coprs/build/${build_id}/"
-                exit 1
-                ;;
-            esac
-            sleep 60
-          done
-          echo "::error::Timed out waiting for kmod-yeetmouse build ${build_id}"
-          exit 1
+          python3 .github/scripts/copr_build.py wait "${{ steps.push.outputs.sha }}" \
+            "kmod-yeetmouse=${{ steps.baseline.outputs.kmod_yeetmouse }}" \
+            "yeetmouse=${{ steps.baseline.outputs.yeetmouse }}" \
+            "yeetmouse-gui=${{ steps.baseline.outputs.yeetmouse_gui }}"
         env:
           COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
           COPR_TOKEN: ${{ secrets.COPR_TOKEN }}

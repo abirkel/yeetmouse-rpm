@@ -75,15 +75,15 @@ install -D -m 644 %{SOURCE4} \
 %changelog
 * Thu Oct 08 2026 abirkel - 0-5
 - Split the GUI back out into its own yeetmouse-gui package: this package shipping
-  %{_bindir}/yeetmouse-gui at the same time as a separate yeetmouse-gui package was a real
+  /usr/bin/yeetmouse-gui at the same time as a separate yeetmouse-gui package was a real
   RPM file-ownership conflict (yeetmouse-gui.spec, orphaned since before the COPR migration,
   claims the same path). Reviewed by gpt-5.6-terra (option (a): CLI-only, GUI is
-  yeetmouse-gui's sole responsibility). Dropped make GUI, the GUI install line,
-  %{_bindir}/yeetmouse-gui from %files, and the glfw/mesa-libGL BuildRequires/Requires that
-  existed only for it -- confirmed safe by reading ConfigHelper.cpp/DriverHelper.cpp/
-  CustomCurve.cpp directly, none include GL/GLFW headers. Also bumped the stale %global
-  commit pin (99844bb, pre-dates upstream's tools/yeetmousectl/ restructuring) to 78dcd0d5,
-  the commit this repo's own version-tracking already uses.
+  yeetmouse-gui's sole responsibility). Dropped the GUI build/install lines, the GUI entry
+  from the files list, and the glfw/mesa-libGL BuildRequires/Requires that existed only for
+  it -- confirmed safe by reading ConfigHelper.cpp/DriverHelper.cpp/CustomCurve.cpp directly,
+  none include GL/GLFW headers. Also bumped the stale commit pin (99844bb, pre-dates
+  upstream's tools/yeetmousectl/ restructuring) to 78dcd0d5, the commit this repo's own
+  version-tracking already uses.
 * Sun Oct 04 2026 abirkel - 0-4
 - Move /etc/yeetmouse.conf ownership here from kmod-yeetmouse (design doc Section 3.3b):
   confirmed by a real multi-package install test that the old per-kernel-subpackage ownership

@@ -7,14 +7,15 @@ RPM packages for the [YeetMouse](https://github.com/AndyFilter/YeetMouse) mouse 
 
 ## Overview
 
-This repository provides automated RPM packaging for YeetMouse, a customizable mouse acceleration driver consisting of a kernel module and GUI configuration tool. Packages are built via [COPR](https://copr.fedorainfracloud.org/) and published to a GPG-signed repository.
+This repository provides automated RPM packaging for YeetMouse, a customizable mouse acceleration driver consisting of a kernel module, a CLI tool, and a GUI configuration tool. Packages are built via [COPR](https://copr.fedorainfracloud.org/) and published to a GPG-signed repository.
 
 ## Packages
 
-- **kmod-yeetmouse**: Pre-compiled kernel module packages for specific kernel versions
-  - Built for both Aurora (main kernel) and Bazzite (custom kernel) distributions
-  - Automatically rebuilt when kernel versions change
-- **yeetmouse**: GUI application for configuring mouse acceleration parameters
+- **kmod-yeetmouse**: Pre-compiled kernel module packages for specific kernel versions.
+  Automatically rebuilt when the upstream driver changes or Fedora's kernel bumps.
+- **yeetmouse**: `yeetmousectl` CLI tool and the systemd service that applies
+  `/etc/yeetmouse.conf` at boot
+- **yeetmouse-gui**: Graphical application for configuring mouse acceleration parameters
 
 ## Installation
 
@@ -37,11 +38,14 @@ The GPG public key will be automatically imported when you first install a packa
 Install YeetMouse and its dependencies:
 
 ```bash
-# Install yeetmouse (automatically installs kmod-yeetmouse as a dependency)
-sudo dnf install yeetmouse
+# Install the CLI, GUI, and the matching kmod for your kernel
+sudo dnf install yeetmouse yeetmouse-gui
 ```
 
-The `yeetmouse` package will automatically pull in the appropriate `kmod-yeetmouse` package for your kernel version. The kmod package is pre-compiled for your specific kernel, so installation is fast and doesn't require compilation.
+Both `yeetmouse` and `yeetmouse-gui` depend on `kmod-yeetmouse`, which pulls in the kmod
+package built for your specific kernel version -- pre-compiled, so installation is fast and
+doesn't require local compilation. Install just `yeetmouse` if you only need the CLI/service
+and not the GUI.
 
 ### Post-Installation
 

@@ -29,7 +29,7 @@ Install the required build dependencies:
 
 ```bash
 # Install build dependencies
-sudo dnf install rpm-build rpmdevtools rpmlint akmods kmodtool \
+sudo dnf install rpm-build rpmdevtools rpmlint kmodtool \
                  kernel-devel gcc gcc-c++ make git wget \
                  glfw-devel mesa-libGL-devel
 ```

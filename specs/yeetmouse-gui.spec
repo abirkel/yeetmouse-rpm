@@ -1,6 +1,6 @@
 %global debug_package %{nil}
-%global commit 99844bbd786d612657d892cac2f663d940fd3d62
-%global shortcommit 99844bb
+%global commit 78dcd0d573bedd5dd7b9e29e9162b28c9eb2fd7b
+%global shortcommit 78dcd0d
 
 Name:           yeetmouse-gui
 Version:        0.9.2
@@ -15,7 +15,8 @@ BuildRequires:  make
 BuildRequires:  glfw-devel
 BuildRequires:  mesa-libGL-devel
 
-Requires:       (akmod-yeetmouse or kmod-yeetmouse)
+Requires:       kmod-yeetmouse
+Requires:       yeetmouse
 Requires:       glfw
 Requires:       mesa-libGL
 

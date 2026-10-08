@@ -1,8 +1,8 @@
 %global debug_package %{nil}
 %global kmod_name yeetmouse
 
-%global commit %{?commit}%{!?commit:99844bbd786d612657d892cac2f663d940fd3d62}
-%global shortcommit %{?shortcommit}%{!?shortcommit:99844bb}
+%global commit %{?commit}%{!?commit:78dcd0d573bedd5dd7b9e29e9162b28c9eb2fd7b}
+%global shortcommit %{?shortcommit}%{!?shortcommit:78dcd0d}
 
 Name:           %{kmod_name}-kmod
 Version:        0

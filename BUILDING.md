@@ -66,7 +66,16 @@ Before pushing a spec change, also run `rpmspec --parse <spec>`. It catches macr
 
 ## How COPR builds the packages
 
-Each package is a COPR SCM package using the `make_srpm` method, with webhook rebuilds turned off. The GitHub Actions workflows start every build through COPR's API (see README.md, "Automated Builds"). COPR runs `make -f .copr/Makefile srpm outdir=<dir> spec=<spec>` as root in a `fedora-44-x86_64` mock chroot. For `kmod-yeetmouse.spec` the Makefile installs `kmodtool` and `kernel-devel` first, because the spec needs both at parse time. The kmod is then built against whatever `kernel-devel` that chroot provides.
+Each package is a COPR SCM package using the `make_srpm` method, with webhook rebuilds turned off. The GitHub Actions workflows start every build through COPR's API (see README.md, "Automated Builds"). COPR runs `make -f .copr/Makefile srpm outdir=<dir> spec=<spec>` as root in a `fedora-44-x86_64` mock chroot. For `kmod-yeetmouse.spec` the Makefile installs `kmodtool` and `kernel-devel` first, because the spec needs both at parse time. That covers only the SRPM step. COPR then builds the binary packages in a separate mock chroot and parses the spec again before any `BuildRequires` are installed, so both packages must also be in that chroot's buildroot. The kmod is built against whatever `kernel-devel` that chroot provides.
+
+Every enabled chroot needs `kmodtool` and `kernel-devel` as additional buildroot packages. Without them the kmod build fails with `kmodtool: command not found`. Set them whenever a chroot is added, for example when Fedora 45 is added, and check the result:
+
+```bash
+copr-cli edit-chroot abirkel/yeetmouse/fedora-44-x86_64 --packages "kmodtool kernel-devel"
+curl -s "https://copr.fedorainfracloud.org/api_3/project-chroot?ownername=abirkel&projectname=yeetmouse&chrootname=fedora-44-x86_64" | python3 -c 'import sys, json; print(json.load(sys.stdin)["additional_packages"])'
+```
+
+A new Fedora release is not added automatically, because the project has no Rawhide chroot for COPR's branching to copy. Adding one also means updating `COPR_CHROOT` in the three workflows.
 
 `kmod-yeetmouse.spec` has no `%files`, `%post` or `%postun` for its main package, because kmodtool generates them for each `kmod-yeetmouse-<kernel>` package. When the Fedora target or the kmodtool version changes, check a real COPR build's package list, file ownership and scriptlets (`rpm -qp --list --scripts`) to confirm that each per-kernel package still owns its module and runs `depmod`, and that no binary package other than `kmod-yeetmouse-<kernel>` and `yeetmouse-kmod-common` is built. The source package is named `yeetmouse-kmod`, so that name is expected only as the `.src.rpm`.
 

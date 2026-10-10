@@ -223,6 +223,13 @@ def check_bump(base):
         except subprocess.CalledProcessError:
             print(f"{pkg}: {spec} is new at this revision, no serial check")
             continue
+        if not LOOSE["pkgserial"].search(old_text):
+            # One-time transition: the base predates pkgserial entirely, so
+            # there is nothing to compare against. A base that HAS a
+            # pkgserial line but a malformed one still fails parse() below.
+            print(f"{pkg}: {spec} introduces pkgserial at this revision, "
+                  f"no serial check")
+            continue
         old = parse(old_text, f"{base}:{spec}")
         if new["pkgserial"] <= old["pkgserial"]:
             errors.append(

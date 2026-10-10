@@ -3,16 +3,18 @@
 
 %global commit %{?commit}%{!?commit:78dcd0d573bedd5dd7b9e29e9162b28c9eb2fd7b}
 %global shortcommit %{?shortcommit}%{!?shortcommit:78dcd0d}
+# Upstream committer date (UTC) of the pinned commit. Informational only.
+%global commitdate 20260803
+# Build order counter. pkgserial alone decides which build is newer, so it
+# only ever goes up: the upstream poller raises it in all three specs when it
+# changes the pin, the kernel poller raises it here for a kernel-only rebuild,
+# and a packaging-only change here must raise it by hand (check-and-build.yml
+# fails the push otherwise). See .github/scripts/spec_version.py.
+%global pkgserial 1
 
 Name:           %{kmod_name}-kmod
 Version:        0
-Release:        %{?release}%{!?release:1}%{?dist}
-# Epoch: see design doc Section 3.5 -- bump to 1 at the actual COPR cutover point, confirmed
-# by direct rpmdev-vercmp testing to be the only safe way to guarantee every COPR-built NEVR
-# outranks every already-published GitHub-Releases-era NEVR regardless of Release string
-# shape. Left commented out here since this spec is not yet the live cutover build; uncomment
-# (Epoch: 1) when this actually replaces the GitHub Actions pipeline.
-# Epoch:          1
+Release:        %{pkgserial}.%{commitdate}git%{shortcommit}%{?dist}
 Summary:        YeetMouse mouse acceleration kernel module
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -107,6 +109,13 @@ if [ $1 -eq 0 ]; then
 fi
 
 %changelog
+* Sat Oct 10 2026 abirkel - 0-1.20260803git78dcd0d
+- New versioning for the COPR project: Release is pkgserial.commitdate
+  git shortcommit, and pkgserial alone orders builds. COPR SCM builds use
+  the spec's Release as written, so the old release-number placeholder
+  never changed between builds. No Epoch: nothing needs to outrank the old
+  GitHub-era packages, so the Epoch bump planned in the entry below was
+  dropped.
 * Sun Oct 04 2026 abirkel - 0-1
 - Rewritten for COPR: chroot-provisioned kmodtool/kernel-devel (no more external pre-install
   step), kernel-devel resolved via embedded rpm -q at spec-parse time, %files lists the

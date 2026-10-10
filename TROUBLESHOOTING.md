@@ -68,22 +68,21 @@ package must be installed alongside `yeetmouse-gui`.
 
 **Solutions**:
 ```bash
-# Verify repository is configured
-cat /etc/yum.repos.d/abirkel-stable.repo
+# Verify the COPR repository is configured and enabled
+sudo dnf repolist | grep -i yeetmouse
 
-# Check repository is enabled
-sudo dnf repolist | grep yeetmouse
+# Re-enable it if missing
+sudo dnf copr enable abirkel/yeetmouse
 
 # Clear DNF cache and retry
 sudo dnf clean all
 sudo dnf makecache
 
-# If GPG verification fails, manually import the key
-sudo rpm --import https://raw.githubusercontent.com/abirkel/yeetmouse-rpm/main/RPM-GPG-KEY-yeetmouse
-
-# Try installing again
-sudo dnf install kmod-yeetmouse yeetmouse yeetmouse-gui
+# Install the kmod for your running kernel, the CLI and the GUI
+sudo dnf install "kmod-yeetmouse-$(uname -r)" yeetmouse yeetmouse-gui
 ```
+
+COPR signs every package with the project's own key, and `dnf` imports it on first install.
 
 ## Kernel Update Breaks Module
 
@@ -92,13 +91,12 @@ sudo dnf install kmod-yeetmouse yeetmouse yeetmouse-gui
 **Solutions**:
 ```bash
 # Check if a kmod package exists for your new kernel
-dnf list available | grep kmod-yeetmouse
+dnf list --available "kmod-yeetmouse-$(uname -r)"
 
-# If available, update to it
-sudo dnf update kmod-yeetmouse
+# If available, install it (each kernel has its own kmod package)
+sudo dnf install "kmod-yeetmouse-$(uname -r)"
 
-# If not available yet, check back after the next scheduled rebuild, or trigger one
-# via the repo's own kernel-bump poller if you maintain this repo yourself
+# If not available yet, check back after the next scheduled rebuild (every 12 hours)
 ```
 
 ## GUI Display Issues
@@ -193,10 +191,10 @@ GitHub Actions. To check build status:
 rpm -qa | grep yeetmouse
 
 # Update all yeetmouse packages together
-sudo dnf update kmod-yeetmouse yeetmouse yeetmouse-gui
+sudo dnf update 'kmod-yeetmouse-*' yeetmouse-kmod-common yeetmouse yeetmouse-gui
 
-# Or reinstall to ensure consistency
-sudo dnf reinstall kmod-yeetmouse yeetmouse yeetmouse-gui
+# Or reinstall the kmod for your running kernel together with the rest
+sudo dnf reinstall "kmod-yeetmouse-$(uname -r)" yeetmouse-kmod-common yeetmouse yeetmouse-gui
 ```
 
 ## Uninstalling YeetMouse
@@ -208,10 +206,10 @@ If you need to completely remove YeetMouse:
 sudo modprobe -r yeetmouse
 
 # Remove packages
-sudo dnf remove kmod-yeetmouse yeetmouse-kmod-common yeetmouse yeetmouse-gui
+sudo dnf remove 'kmod-yeetmouse-*' yeetmouse-kmod-common yeetmouse yeetmouse-gui
 
-# Remove repository configuration (optional)
-sudo rm /etc/yum.repos.d/abirkel-stable.repo
+# Remove the COPR repository (optional)
+sudo dnf copr remove abirkel/yeetmouse
 ```
 
 ## Reporting Issues

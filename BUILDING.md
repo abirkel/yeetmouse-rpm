@@ -1,240 +1,97 @@
 # Building Locally
 
-This guide covers how to build the YeetMouse RPM packages locally on your system.
+This guide covers how to build the YeetMouse RPM packages on your own Fedora system. Published packages are built by COPR, see [How COPR builds the packages](#how-copr-builds-the-packages).
 
-## Container Requirements (COPR)
+## Packages
 
-Builds run in COPR's `fedora-44-x86_64` chroot, which provisions `kmodtool` and `kernel-devel` automatically. `kmodtool` resolves kernel-devel's installed version at spec-parse time via `rpm -q`, so no manual kernel-devel pre-install step or container selection is needed the way the old GitHub Actions pipeline required.
-- `quay.io/fedora/fedora:latest` - Standard Fedora
-- `fedora:43` - Specific Fedora version
+- `specs/kmod-yeetmouse.spec`: kernel module, built per kernel version with `kmodtool`
+- `specs/yeetmouse.spec`: `yeetmouse` CLI tool and service
+- `specs/yeetmouse-gui.spec`: GUI
 
-### Configuration
-
-The container image is configured in `build.conf` at the repository root:
-
-```bash
-CONTAINER_IMAGE=ghcr.io/ublue-os/aurora
-CONTAINER_VERSION=latest
-DEFAULT_KERNEL_TYPE=main
-```
-
-**Configuration Options**:
-- `CONTAINER_IMAGE`: Default container image for builds
-- `CONTAINER_VERSION`: Container image tag/version
-- `DEFAULT_KERNEL_TYPE`: Default kernel type (main or bazzite)
+All non-Source0 files the specs use (`config.h`, `yeetmouse.service`, `yeetmouse-preset.conf`, `yeetmouse-sysusers.conf`, `yeetmouse.conf`) live at the repository root, so the repository root is the RPM source directory.
 
 ## Prerequisites
 
-Install the required build dependencies:
-
 ```bash
-# Install build dependencies
-sudo dnf install rpm-build rpmdevtools rpmlint kmodtool \
-                 kernel-devel gcc gcc-c++ make git wget \
-                 glfw-devel mesa-libGL-devel
+sudo dnf install rpm-build rpmdevtools rpmlint kmodtool kernel-devel \
+                 gcc gcc-c++ make git glfw-devel mesa-libGL-devel
 ```
 
-## Build Process
-
-Follow these steps to build the packages locally:
+`kmod-yeetmouse.spec` builds against every `kernel-devel` version installed at the time the spec is parsed. To build for your running kernel, install the matching one:
 
 ```bash
-# Clone this repository
+sudo dnf install "kernel-devel-$(uname -r)"
+```
+
+## Build
+
+```bash
 git clone https://github.com/abirkel/yeetmouse-rpm.git
 cd yeetmouse-rpm
 
-# Set up RPM build tree
-rpmdev-setuptree
+# Download Source0 (the upstream YeetMouse tarball pinned by %global commit)
+spectool -g -C . specs/kmod-yeetmouse.spec
+spectool -g -C . specs/yeetmouse.spec
+spectool -g -C . specs/yeetmouse-gui.spec
 
-# Copy spec files
-cp specs/*.spec ~/rpmbuild/SPECS/
-cd ~/rpmbuild/SPECS
+# Build, using the repository root as the source directory
+rpmbuild -ba --define "_sourcedir $PWD" specs/kmod-yeetmouse.spec
+rpmbuild -ba --define "_sourcedir $PWD" specs/yeetmouse.spec
+rpmbuild -ba --define "_sourcedir $PWD" specs/yeetmouse-gui.spec
 
-# Set version variables
-YEETMOUSE_COMMIT="99844bbd786d612657d892cac2f663d940fd3d62"  # Full commit hash
-KERNEL_VERSION=$(uname -r)
-RELEASE_NUMBER="1"
-
-# Download the YeetMouse source
-spectool -g -R kmod-yeetmouse.spec
-spectool -g -R yeetmouse.spec
-
-# Build the kmod package
-rpmbuild --define "kernel_version ${KERNEL_VERSION}" \
-         --define "commit ${YEETMOUSE_COMMIT}" \
-         --define "release ${RELEASE_NUMBER}" \
-         -ba kmod-yeetmouse.spec
-
-# Build the CLI package
-rpmbuild --define "commit ${YEETMOUSE_COMMIT}" \
-         --define "release ${RELEASE_NUMBER}" \
-         -ba yeetmouse.spec
-
-# Find built packages
-ls -l ~/rpmbuild/RPMS/x86_64/
-ls -l ~/rpmbuild/SRPMS/
+ls -l ~/rpmbuild/RPMS/x86_64/ ~/rpmbuild/SRPMS/
 ```
 
-**Note**: The spec files use RPM macros for version and release numbers. You must pass these values via `--define` parameters to rpmbuild.
+The upstream commit is pinned by `%global commit` in each spec. To build a different upstream commit, pass `--define "commit <full-sha>" --define "shortcommit <short-sha>"` to `spectool` and `rpmbuild`.
 
-### Building for Different Kernel Versions
+Each spec's `Release` is `%{pkgserial}.%{commitdate}git%{shortcommit}`. `pkgserial` alone decides which build is newer, so any change to a spec or to a file it uses must raise that spec's `%global pkgserial`. `check-and-build.yml` fails a pull request or push to `main` that does not.
 
-To build kmod packages for a specific kernel version:
+The kmod binary package is named after the kernel it was built for, for example `kmod-yeetmouse-7.2.9-200.fc44.x86_64`.
+
+## Install a local build
 
 ```bash
-# Install kernel-devel for target kernel
-sudo dnf install kernel-devel-6.17.8-300.fc43.x86_64
-
-# Set the kernel version
-KERNEL_VERSION="6.17.8-300.fc43.x86_64"
-YEETMOUSE_COMMIT="99844bbd786d612657d892cac2f663d940fd3d62"
-RELEASE_NUMBER="1"
-
-# Build kmod for that kernel
-rpmbuild --define "kernel_version ${KERNEL_VERSION}" \
-         --define "commit ${YEETMOUSE_COMMIT}" \
-         --define "release ${RELEASE_NUMBER}" \
-         -ba ~/rpmbuild/SPECS/kmod-yeetmouse.spec
-
-# Find built kmod packages
-ls -l ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse*
+sudo dnf install ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm \
+                 ~/rpmbuild/RPMS/x86_64/yeetmouse-*.rpm \
+                 ~/rpmbuild/RPMS/noarch/yeetmouse-kmod-common-*.rpm
 ```
 
-**Package Naming**: The kmod package will be named `kmod-yeetmouse-{version}-{release}.{kernel_version}.rpm`, ensuring it's specific to that kernel version.
-
-## Installing Local Builds
-
-Once the packages are built, you can install them:
-
-```bash
-# Install the locally built packages
-sudo dnf install ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*.rpm
-sudo dnf install ~/rpmbuild/RPMS/x86_64/yeetmouse-*.rpm
-```
-
-## Modifying the Spec Files
-
-The spec files are located in the `specs/` directory:
-
-- `specs/kmod-yeetmouse.spec` - Kernel module package
-- `specs/yeetmouse.spec` - CLI tool package
-
-The spec files use RPM macros for version and release numbers:
-```spec
-Version:        %{?version}%{!?version:0.9.2}
-Release:        %{?release}%{!?release:1}%{?dist}
-```
-
-After making changes to the spec files, copy them to your RPM build tree and rebuild with appropriate macros:
-
-```bash
-cp specs/*.spec ~/rpmbuild/SPECS/
-cd ~/rpmbuild/SPECS
-
-# Build with version/release macros
-rpmbuild --define "commit 99844bbd786d612657d892cac2f663d940fd3d62" \
-         --define "release 1" \
-         --define "kernel_version $(uname -r)" \
-         -ba kmod-yeetmouse.spec
-
-rpmbuild --define "commit 99844bbd786d612657d892cac2f663d940fd3d62" \
-         --define "release 1" \
-         -ba yeetmouse.spec
-```
-
-## Linting
-
-Before committing changes, lint the spec files:
+## Lint
 
 ```bash
 rpmlint specs/*.spec
 ```
 
+Before pushing a spec change, also run `rpmspec --parse <spec>`. It catches macro errors, such as an unescaped `%` in `%changelog` text, without a COPR build.
+
+## How COPR builds the packages
+
+Each package is a COPR SCM package using the `make_srpm` method, with webhook rebuilds turned off. The GitHub Actions workflows start every build through COPR's API (see README.md, "Automated Builds"). COPR runs `make -f .copr/Makefile srpm outdir=<dir> spec=<spec>` as root in a `fedora-44-x86_64` mock chroot. For `kmod-yeetmouse.spec` the Makefile installs `kmodtool` and `kernel-devel` first, because the spec needs both at parse time. The kmod is then built against whatever `kernel-devel` that chroot provides.
+
 ## Troubleshooting
 
-### Build Failures
-
 **Missing kernel-devel**
+
 ```bash
-# Install kernel-devel for your kernel
-sudo dnf install kernel-devel-$(uname -r)
-
-# Or for a specific kernel version
-sudo dnf install kernel-devel-6.17.8-300.fc43.x86_64
-
-# Check available kernel-devel versions
-dnf list available kernel-devel
-```
-
-**RPM macro errors**
-```bash
-# Ensure you're passing all required macros
-rpmbuild --define "kernel_version $(uname -r)" \
-         --define "commit 99844bbd786d612657d892cac2f663d940fd3d62" \
-         --define "release 1" \
-         -ba kmod-yeetmouse.spec
-
-# Check spec file for required macros
-grep -E "%(version|release|kernel_version|commit)" specs/kmod-yeetmouse.spec
-```
-
-**Compilation errors**
-```bash
-# Check build logs
-less ~/rpmbuild/BUILD/yeetmouse-*/build.log
-
-# Verify kernel-devel matches your kernel
-rpm -q kernel-devel
-
-# Ensure build dependencies are installed
-sudo dnf builddep specs/kmod-yeetmouse.spec
+sudo dnf install "kernel-devel-$(uname -r)"
+dnf list --available kernel-devel
 ```
 
 **Module fails to load after installation**
-```bash
-# Check if module was built
-ls -la /lib/modules/$(uname -r)/extra/yeetmouse/
 
-# Try loading manually with verbose output
+```bash
+ls -la "/lib/modules/$(uname -r)/extra/yeetmouse/"
 sudo modprobe -v yeetmouse
-
-# Check kernel logs for errors
 sudo dmesg | grep yeetmouse
-
-# Verify module signature (if secure boot enabled)
-modinfo yeetmouse | grep signature
+modinfo yeetmouse | grep signature   # if Secure Boot is enabled
 ```
 
-### Version Mismatch Issues
+**kmod package does not match the running kernel**
 
-**kmod package doesn't match running kernel**
-```bash
-# Check your kernel version
-uname -r
+Install `kernel-devel` for your running kernel and rebuild `kmod-yeetmouse.spec` as shown above.
 
-# Build kmod for your specific kernel
-KERNEL_VERSION=$(uname -r)
-rpmbuild --define "kernel_version ${KERNEL_VERSION}" \
-         --define "commit 99844bbd786d612657d892cac2f663d940fd3d62" \
-         --define "release 1" \
-         -ba kmod-yeetmouse.spec
+## Package signing
 
-# Install the matching package
-sudo dnf install ~/rpmbuild/RPMS/x86_64/kmod-yeetmouse-*$(uname -r)*.rpm
-```
+COPR signs published packages with its own per-project GPG key, and `dnf` imports the key the first time you install from the COPR repository. No signing key needs to be configured.
 
-## Package Signing
-
-COPR signs published packages with its own per-project GPG key; there are no repository secrets to configure. The signing key is published automatically alongside the repository and imported on first install.
-
-### Verifying Signed Packages
-
-Users can verify the authenticity of published packages using:
-
-```bash
-# Import the public key
-rpm --import https://raw.githubusercontent.com/<owner>/<repo>/main/RPM-GPG-KEY-yeetmouse
-
-# Verify a package
-rpm -K ~/rpmbuild/RPMS/x86_64/yeetmouse-*.rpm
-```
+The GitHub Actions workflows need two repository secrets to submit builds: `COPR_LOGIN` and `COPR_TOKEN`, from the API token page on COPR (Account, API). COPR tokens expire, so renew them before the expiry date shown there.

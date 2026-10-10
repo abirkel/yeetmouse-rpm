@@ -1,10 +1,15 @@
 %global debug_package %{nil}
-%global commit 78dcd0d573bedd5dd7b9e29e9162b28c9eb2fd7b
-%global shortcommit 78dcd0d
+%global commit %{?commit}%{!?commit:78dcd0d573bedd5dd7b9e29e9162b28c9eb2fd7b}
+%global shortcommit %{?shortcommit}%{!?shortcommit:78dcd0d}
+# Upstream committer date (UTC) of the pinned commit. Informational only.
+%global commitdate 20260803
+# Build order counter, only ever raised. See kmod-yeetmouse.spec and
+# .github/scripts/spec_version.py.
+%global pkgserial 1
 
 Name:           yeetmouse-gui
-Version:        0.9.2
-Release:        3.git%{shortcommit}%{?dist}
+Version:        0
+Release:        %{pkgserial}.%{commitdate}git%{shortcommit}%{?dist}
 Summary:        GUI application for YeetMouse mouse acceleration configuration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -15,7 +20,9 @@ BuildRequires:  make
 BuildRequires:  glfw-devel
 BuildRequires:  mesa-libGL-devel
 
-Requires:       kmod-yeetmouse
+# yeetmouse-kmod is provided by every kernel-specific kmod-yeetmouse-<kernel>
+# package. Nothing provides plain "kmod-yeetmouse".
+Requires:       yeetmouse-kmod
 Requires:       yeetmouse
 Requires:       glfw
 Requires:       mesa-libGL
@@ -59,6 +66,12 @@ install -m 755 gui/YeetMouseGui %{buildroot}%{_bindir}/yeetmouse-gui
 #%%{_datadir}/applications/yeetmouse-gui.desktop
 
 %changelog
+* Sat Oct 10 2026 abirkel - 0-1.20260803git78dcd0d
+- New versioning for the COPR project, same scheme as kmod-yeetmouse:
+  Version 0, Release is pkgserial.commitdate git shortcommit, no Epoch.
+- Require yeetmouse-kmod instead of kmod-yeetmouse, which no package
+  provides.
+- Commit pin is now overridable with --define, like the other specs.
 * Fri Nov 21 2025 github-actions[bot]   <github-actions[bot]@users.noreply.github.com> - 0.9.2-3.git99844bb
 - Rebuild for kernel compatibility
 * Sun Nov 09 2025 github-actions[bot]   <github-actions[bot]@users.noreply.github.com> - 0.9.2-2.git99844bb

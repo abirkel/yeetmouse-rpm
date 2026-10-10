@@ -1,13 +1,15 @@
 %global debug_package %{nil}
 %global commit %{?commit}%{!?commit:78dcd0d573bedd5dd7b9e29e9162b28c9eb2fd7b}
 %global shortcommit %{?shortcommit}%{!?shortcommit:78dcd0d}
+# Upstream committer date (UTC) of the pinned commit. Informational only.
+%global commitdate 20260803
+# Build order counter, only ever raised. See kmod-yeetmouse.spec and
+# .github/scripts/spec_version.py.
+%global pkgserial 1
 
 Name:           yeetmouse
 Version:        0
-Release:        %{?release}%{!?release:1}%{?dist}
-# Epoch: see kmod-yeetmouse.spec's comment and design doc Section 3.5 -- bump both specs'
-# Epoch together at the actual COPR cutover point, not just this one.
-# Epoch:          1
+Release:        %{pkgserial}.%{commitdate}git%{shortcommit}%{?dist}
 Summary:        CLI tool and systemd service for YeetMouse mouse acceleration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -73,6 +75,10 @@ install -D -m 644 %{SOURCE4} \
 %config(noreplace) /etc/yeetmouse.conf
 
 %changelog
+* Sat Oct 10 2026 abirkel - 0-1.20260803git78dcd0d
+- New versioning for the COPR project, same scheme as kmod-yeetmouse:
+  Release is pkgserial.commitdate git shortcommit, no Epoch. The Epoch
+  bump planned in the 0-4 entry below was dropped.
 * Thu Oct 08 2026 abirkel - 0-5
 - Split the GUI back out into its own yeetmouse-gui package: this package shipping
   /usr/bin/yeetmouse-gui at the same time as a separate yeetmouse-gui package was a real

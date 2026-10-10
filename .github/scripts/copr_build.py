@@ -1,45 +1,52 @@
 #!/usr/bin/env python3
-"""Small COPR APIv3 helper for the poller workflows.
+"""COPR APIv3 helper for this repo's workflows.
+
+Builds are only ever started through COPR's API by these workflows. COPR's
+webhook rebuild is OFF for every package: with all sources at the repo root it
+rebuilt every package on every push, republishing unchanged versions. COPR
+serves the newest of two same-NEVRA builds, and deleting that newest one drops
+the NEVRA from the repo with no fallback (fedora-copr/copr#3262).
+
+A package's "current release" is the Release in its spec without the dist tag,
+as printed by `spec_version.py release-prefix`, e.g. "3.20260803git78dcd0d".
+Every package is Version 0.
 
 Subcommands:
-  latest-id PACKAGE
-      Print the id of the newest build of PACKAGE in the project, or 0 if the
-      package has no builds yet. Run this BEFORE pushing, to get a baseline.
+  release-published PACKAGE RELEASE_PREFIX
+      Print "true" if a succeeded build of PACKAGE produced any binary package
+      at version 0 and RELEASE_PREFIX, else "false".
 
-  has-kernel-build KERNEL_NVR CHROOT
-      Print "true" or "false": whether a succeeded kmod-yeetmouse build exists
-      whose binary subpackage is kmod-yeetmouse-KERNEL_NVR. Non-zero exit only
-      on an API error.
+  has-kernel-build KERNEL_NVR RELEASE_PREFIX
+      Print "true" if a succeeded kmod-yeetmouse build produced
+      kmod-yeetmouse-KERNEL_NVR at version 0 and RELEASE_PREFIX, else "false".
 
-  wait COMMIT_SHA PACKAGE=BASELINE_ID [PACKAGE=BASELINE_ID ...]
-      For each PACKAGE, collect every build the COPR GitHub webhook queued for
-      the push of COMMIT_SHA (duplicates included) until the shared appear
-      deadline, and wait for all of them to finish. Exit 0 only if every
-      package has at least one such build and all of them succeeded. Exit 1
-      if any failed/was canceled, if a package got no webhook build before the
-      appear deadline, or if any build did not finish before the shared finish
-      deadline. All packages are reported before exiting. Success is therefore
-      reported no earlier than the appear deadline.
+  ensure-built PACKAGE=RELEASE_PREFIX [PACKAGE=RELEASE_PREFIX ...]
+      For every PACKAGE whose current release is not yet published: wait for
+      every build of it already queued or running, re-check, then submit one
+      build for what is still missing, wait, and re-check. Publication by ANY
+      build counts, so a concurrent build is never duplicated. A package whose
+      submission outcome was unknown is never submitted twice in one run.
+      A succeeded build that published a HIGHER serial (main moved on before
+      COPR checked it out) also counts; the newer main's run covers it.
+      Exit 0 only if every package ends up published.
+      Packages already published are skipped, so this is safe to run on every
+      push and every poll.
 
-Build provenance: COPR's GitHub webhook handler submits each rebuild with
-committish set to the push payload's "after" SHA, and that value is exposed by
-build/source-build-config/<id> as source_dict.committish. A build is only
-accepted as ours if its id is above the pre-push baseline AND its committish
-equals COMMIT_SHA, so a manual build (committish "main", or a branch name) that
-lands in the same window is ignored instead of being mistaken for ours.
+"true"/"false" answers exit 0. Any API error exits non-zero, so a calling step
+fails instead of guessing.
 
 Environment:
-  COPR_URL, COPR_OWNER, COPR_PROJECT   required
-  COPR_LOGIN, COPR_TOKEN               optional (reads on a public project work
-                                       without them)
-  APPEAR_TIMEOUT_SECS                  default 900, measured from start of wait
-  FINISH_TIMEOUT_SECS                  default 3600, measured from start of wait
-  POLL_SECS                            default 30
+  COPR_URL, COPR_OWNER, COPR_PROJECT, COPR_CHROOT   required
+  COPR_LOGIN, COPR_TOKEN     required to submit; reads work without them
+  FINISH_TIMEOUT_SECS        default 3600, per wait
+  POLL_SECS                  default 30
+  RECONCILE_SECS             default 120 (see build submission below)
 """
 
 import base64
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -50,22 +57,29 @@ import urllib.request
 COPR_URL = os.environ["COPR_URL"].rstrip("/")
 OWNER = os.environ["COPR_OWNER"]
 PROJECT = os.environ["COPR_PROJECT"]
-APPEAR_TIMEOUT = int(os.environ.get("APPEAR_TIMEOUT_SECS", "900"))
+CHROOT = os.environ["COPR_CHROOT"]
 FINISH_TIMEOUT = int(os.environ.get("FINISH_TIMEOUT_SECS", "3600"))
 POLL = int(os.environ.get("POLL_SECS", "30"))
+RECONCILE_SECS = int(os.environ.get("RECONCILE_SECS", "120"))
 
-# Terminal states per COPR's build state machine. Anything else (pending,
-# importing, starting, running, waiting, forked, skipped...) means keep waiting.
 FAILED_STATES = {"failed", "canceled"}
+# States after which a build never changes again.
+TERMINAL_STATES = {"succeeded", "failed", "canceled", "skipped"}
 
-# Transient failures worth retrying: timeouts, connection errors, rate limits
-# and server errors. Anything else (401/403 bad token, 404 wrong project) is a
-# real misconfiguration and fails immediately.
+# Transient read failures worth retrying. Anything else (401/403 bad token,
+# 404 wrong project) is a real misconfiguration and fails immediately.
 RETRY_HTTP = {429, 500, 502, 503, 504}
 RETRY_ATTEMPTS = 5
 
-# Page size for walking build/list newest-first.
 PAGE_SIZE = int(os.environ.get("PAGE_SIZE", "50"))
+
+
+def _auth_header():
+    login, token = os.environ.get("COPR_LOGIN"), os.environ.get("COPR_TOKEN")
+    if login and token:
+        cred = base64.b64encode(f"{login}:{token}".encode()).decode()
+        return f"Basic {cred}"
+    return None
 
 
 def _get(path, params=None):
@@ -73,10 +87,9 @@ def _get(path, params=None):
     if params:
         url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    login, token = os.environ.get("COPR_LOGIN"), os.environ.get("COPR_TOKEN")
-    if login and token:
-        cred = base64.b64encode(f"{login}:{token}".encode()).decode()
-        req.add_header("Authorization", f"Basic {cred}")
+    auth = _auth_header()
+    if auth:
+        req.add_header("Authorization", auth)
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -95,10 +108,40 @@ def _get(path, params=None):
         time.sleep(delay)
 
 
+class AmbiguousPost(Exception):
+    """The request may or may not have reached COPR."""
+
+
+def _post(path, body):
+    """POST a JSON body. Never retried: a definite rejection (4xx) exits, and
+    a transport failure or 5xx raises AmbiguousPost, because COPR may have
+    created the build anyway."""
+    auth = _auth_header()
+    if not auth:
+        raise SystemExit("COPR_LOGIN and COPR_TOKEN are required to submit a build")
+    req = urllib.request.Request(
+        f"{COPR_URL}/api_3/{path}",
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Accept": "application/json",
+                 "Content-Type": "application/json",
+                 "Authorization": auth})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:2000]
+        if e.code >= 500:
+            raise AmbiguousPost(f"HTTP {e.code}: {detail}") from e
+        raise SystemExit(f"COPR POST {path} failed: HTTP {e.code}: {detail}")
+    except (urllib.error.URLError, socket.timeout, TimeoutError,
+            ConnectionError, json.JSONDecodeError) as e:
+        raise AmbiguousPost(str(e)) from e
+
+
 def _list_builds(package, limit, offset=0, status=None):
-    # order/order_type are passed explicitly: COPR's Paginator guesses DESC for
-    # order=id, but the API's PaginationForm declares order_type default ASC, so
-    # relying on the implicit default is ambiguous.
+    # order/order_type are explicit: COPR's Paginator guesses DESC for
+    # order=id, but the API form declares order_type default ASC.
     params = {
         "ownername": OWNER,
         "projectname": PROJECT,
@@ -113,177 +156,260 @@ def _list_builds(package, limit, offset=0, status=None):
     return _get("build/list", params)["items"]
 
 
-def latest_id(package):
+def _iter_builds(package, status=None):
+    """Every build of PACKAGE, newest first."""
+    offset = 0
+    while True:
+        items = _list_builds(package, limit=PAGE_SIZE, offset=offset,
+                             status=status)
+        yield from items
+        if len(items) < PAGE_SIZE:
+            return
+        offset += PAGE_SIZE
+
+
+def _release_matches(release, prefix):
+    # release is "<prefix>.<dist>", e.g. "3.20260803git78dcd0d.fc44". This
+    # project only targets fedora-*-x86_64 chroots, whose dist is "fcNN".
+    # A new chroot family with another dist format must update this check.
+    if not release.startswith(prefix + "."):
+        return False
+    return re.fullmatch(r"fc[0-9]+", release[len(prefix) + 1:]) is not None
+
+
+_built_cache = {}
+
+
+def _built(build_id):
+    # A finished build's package list never changes; callers only ask about
+    # succeeded builds, so caching within one invocation is safe. Cost is one
+    # request per succeeded build of the package per invocation, which stays
+    # in the low hundreds for this project's build rate.
+    if build_id not in _built_cache:
+        _built_cache[build_id] = _get(
+            "build-chroot/built-packages",
+            {"build_id": build_id, "chrootname": CHROOT})["packages"]
+    return _built_cache[build_id]
+
+
+def _build_has(build_id, prefix, name=None):
+    """True if build BUILD_ID produced a package at version 0 and PREFIX
+    (named NAME, when given)."""
+    return any(p.get("version") == "0"
+               and _release_matches(p.get("release", ""), prefix)
+               and (name is None or p.get("name") == name)
+               for p in _built(build_id))
+
+
+def _find_published(package, prefix, name=None):
+    for build in _iter_builds(package, status="succeeded"):
+        # Re-check state client-side in case the server ignores the filter.
+        if build.get("state") != "succeeded":
+            continue
+        if _build_has(build["id"], prefix, name):
+            return int(build["id"])
+    return 0
+
+
+def release_published(package, prefix):
+    bid = _find_published(package, prefix)
+    print(f"{package}: release {prefix} "
+          + (f"published by build {bid}" if bid else "not published"),
+          file=sys.stderr)
+    print("true" if bid else "false")
+    return 0
+
+
+def has_kernel_build(nvr, prefix):
+    want = f"kmod-yeetmouse-{nvr}"
+    bid = _find_published("kmod-yeetmouse", prefix, name=want)
+    print(f"{want}-0-{prefix}: "
+          + (f"built by {bid}" if bid else f"no succeeded build in {CHROOT}"),
+          file=sys.stderr)
+    print("true" if bid else "false")
+    return 0
+
+
+def _in_flight(package):
+    """Every not-yet-finished build of PACKAGE. Scans the full history: a
+    truncated scan could miss an old queued build and lead to a duplicate."""
+    return [int(b["id"]) for b in _iter_builds(package)
+            if b.get("state") not in TERMINAL_STATES]
+
+
+def _latest_id(package):
     items = _list_builds(package, limit=1)
     return int(items[0]["id"]) if items else 0
 
 
-_committish_cache = {}
+def _submit(package):
+    """Submit one build of PACKAGE. Return (build ids to wait on, ambiguous).
 
-
-def _committish(build_id):
-    # A build's source config never changes, so fetch it once per build.
-    if build_id not in _committish_cache:
-        cfg = _get(f"build/source-build-config/{build_id}")
-        _committish_cache[build_id] = cfg.get("source_dict", {}).get("committish")
-    return _committish_cache[build_id]
-
-
-def _find_webhook_builds(package, baseline, sha):
-    """Return (id, submitted_on) for ALL builds of PACKAGE above BASELINE built from SHA.
-
-    Pages through builds newest-first until reaching one at or below the
-    baseline, so a burst of unrelated builds above the baseline can never push
-    ours off a fixed-size page. All matches are returned, so a duplicate
-    webhook delivery for the same SHA is watched too, not silently ignored.
+    Never blindly retried. If the outcome is unknown, every build that appears
+    above the pre-submit baseline within RECONCILE_SECS is returned, because
+    any of them may be the one this POST created; the caller then waits for
+    all of them and never submits again in this run. If none appears, fail so
+    the next run starts from a clean state.
     """
-    matches, offset, page_size = [], 0, PAGE_SIZE
-    while True:
-        items = _list_builds(package, limit=page_size, offset=offset)
-        for build in items:
-            bid = int(build["id"])
-            if bid <= baseline:
-                return matches  # DESC order: the rest predate the push
-            if _committish(bid) == sha:
-                matches.append((bid, build.get("submitted_on") or 0))
-        if len(items) < page_size:
-            return matches
-        offset += page_size
+    baseline = _latest_id(package)
+    try:
+        build = _post("package/build", {
+            "ownername": OWNER,
+            "projectname": PROJECT,
+            "package_name": package,
+        })
+        return [int(build["id"])], False
+    except AmbiguousPost as e:
+        print(f"{package}: submission outcome unknown ({e}); looking for "
+              f"builds above {baseline}", file=sys.stderr)
+    deadline = time.time() + RECONCILE_SECS
+    while time.time() < deadline:
+        time.sleep(15)
+        above = []
+        for b in _iter_builds(package):
+            if int(b["id"]) <= baseline:
+                break  # newest first: the rest predate the POST
+            above.append(int(b["id"]))
+        if above:
+            return above, True
+    raise SystemExit(f"{package}: no build appeared above {baseline} after "
+                     f"an ambiguous submission; not resubmitting")
 
 
-def wait(sha, baselines):
-    """Watch every webhook build for SHA, for every package.
-
-    The set of builds judged per package is defined by COPR's own timestamp:
-    every matching build SUBMITTED at or before the appear deadline. Discovery
-    keeps scanning until it has done at least one scan that started after the
-    deadline, so a build submitted just before the deadline is never missed,
-    and a build submitted after it is never admitted, however the polling
-    passes happen to line up with the deadline.
-
-    A package passes only when that final scan is done, at least one matching
-    build exists, and EVERY matching build succeeded. Any failed/canceled match
-    fails the package. Every package is reported before exiting.
-    """
-    start = time.time()
-    appear_deadline = start + APPEAR_TIMEOUT
-    finish_deadline = start + FINISH_TIMEOUT
-    states = {pkg: {} for pkg in baselines}  # pkg -> {build_id: last state}
-    frozen = {pkg: False for pkg in baselines}  # final post-deadline scan done
-    result = {}  # pkg -> "succeeded" or an error string
-
-    while len(result) < len(baselines):
-        for pkg, baseline in baselines.items():
-            if pkg in result:
+def _wait(builds):
+    """builds: {build_id: package}. Return {build_id: final state}."""
+    deadline = time.time() + FINISH_TIMEOUT
+    states = {bid: None for bid in builds}
+    while states:
+        for bid, state in states.items():
+            if state in TERMINAL_STATES:
                 continue
-            if not frozen[pkg]:
-                scan_started = time.time()
-                for bid, submitted_on in _find_webhook_builds(pkg, baseline, sha):
-                    if submitted_on > appear_deadline or bid in states[pkg]:
-                        continue
-                    states[pkg][bid] = None
-                    print(f"{pkg}: webhook build {bid} for {sha[:7]}: "
-                          f"{COPR_URL}/coprs/build/{bid}/")
-                if scan_started >= appear_deadline:
-                    frozen[pkg] = True
-            now = time.time()
-            collecting = not frozen[pkg]
-            if not states[pkg]:
-                if collecting:
-                    print(f"{pkg}: no build for {sha[:7]} above {baseline} yet")
-                else:
-                    result[pkg] = (f"no webhook build for {sha} appeared within "
-                                   f"{APPEAR_TIMEOUT}s (baseline {baseline}). "
-                                   f"Is the webhook wired up?")
-                continue
-            for bid, state in list(states[pkg].items()):
-                if state == "succeeded" or state in FAILED_STATES:
-                    continue
-                states[pkg][bid] = _get(f"build/{bid}")["state"]
-                print(f"{pkg}: build {bid}: {states[pkg][bid]}")
-            failed = [b for b, s in states[pkg].items() if s in FAILED_STATES]
-            pending = [b for b, s in states[pkg].items()
-                       if s != "succeeded" and s not in FAILED_STATES]
-            if failed:
-                result[pkg] = "; ".join(
-                    f"build {b} {states[pkg][b]}: {COPR_URL}/coprs/build/{b}/"
-                    for b in failed)
-            elif pending and now >= finish_deadline:
-                result[pkg] = "; ".join(
-                    f"build {b} still {states[pkg][b]} after {FINISH_TIMEOUT}s: "
-                    f"{COPR_URL}/coprs/build/{b}/" for b in pending)
-            elif not pending and not collecting:
-                result[pkg] = "succeeded"
-        if len(result) < len(baselines):
-            time.sleep(POLL)
-
-    rc = 0
-    for pkg in baselines:
-        if result[pkg] == "succeeded":
-            print(f"{pkg}: all webhook builds for {sha[:7]} succeeded: "
-                  f"{sorted(states[pkg])}")
-        else:
-            rc = 1
-            print(f"::error::{pkg}: {result[pkg]}")
-    return rc
-
-
-def has_kernel_build(nvr, chroot):
-    """Print "true" if a SUCCEEDED kmod-yeetmouse build exists for kernel NVR,
-    else "false". Always exits 0 on a clean answer; any API error raises and
-    exits non-zero, so the calling step fails instead of guessing.
-
-    Build-level metadata does not carry the kernel version (source_package is
-    only {name, version, url}). The kernel NVR is in the kmodtool-generated
-    binary subpackage name, e.g. "kmod-yeetmouse-7.2.9-200.fc44.x86_64",
-    returned by build-chroot/built-packages as {"packages": [{name, ...}]}
-    (shape confirmed live against build 11093126).
-    """
-    want = f"kmod-yeetmouse-{nvr}"
-    offset, page_size = 0, 100
-    while True:
-        items = _list_builds("kmod-yeetmouse", limit=page_size, offset=offset,
-                             status="succeeded")
-        for build in items:
-            # Re-check state client-side too, in case the server ignores the
-            # status filter.
-            if build.get("state") != "succeeded":
-                continue
-            pkgs = _get("build-chroot/built-packages",
-                        {"build_id": build["id"], "chrootname": chroot})["packages"]
-            if any(p["name"] == want for p in pkgs):
-                print(f"build {build['id']} built {want}", file=sys.stderr)
-                print("true")
-                return 0
-        if len(items) < page_size:
+            states[bid] = _get(f"build/{bid}")["state"]
+            print(f"{builds[bid]}: build {bid}: {states[bid]}")
+        if all(s in TERMINAL_STATES for s in states.values()):
             break
-        offset += page_size
-    print(f"no succeeded build of {want} in {chroot}", file=sys.stderr)
-    print("false")
-    return 0
+        if time.time() >= deadline:
+            break
+        time.sleep(POLL)
+    return states
 
 
-def _parse_baselines(args):
-    baselines = {}
+def _serial(release):
+    head = release.split(".", 1)[0]
+    return int(head) if head.isdigit() else -1
+
+
+def _newer_release_from(build_ids, prefix):
+    """A release with a HIGHER serial than PREFIX published by one of these
+    succeeded builds, or None. That happens when main moved on between our
+    read and COPR's checkout; the newer main's own run covers its release."""
+    want = _serial(prefix)
+    for bid in build_ids:
+        for p in _built(bid):
+            rel = p.get("release", "")
+            if p.get("version") == "0" and _serial(rel) > want:
+                return rel
+    return None
+
+
+def _settle(wanted, todo, builds, states, errors):
+    """After a wait, drop every package in TODO that is now published (by any
+    build, ours or not) or superseded by a newer release; return the rest."""
+    left = {}
+    for pkg, prefix in todo.items():
+        mine = [b for b, p in builds.items() if p == pkg]
+        stuck = [b for b in mine if states.get(b) not in TERMINAL_STATES]
+        if stuck:
+            errors[pkg] = "; ".join(
+                f"build {b} still {states.get(b)} after {FINISH_TIMEOUT}s: "
+                f"{COPR_URL}/coprs/build/{b}/" for b in stuck)
+            continue
+        bid = _find_published(pkg, prefix)
+        if bid:
+            print(f"{pkg}: 0-{prefix} published by build {bid}")
+            continue
+        ok = [b for b in mine if states.get(b) == "succeeded"]
+        newer = _newer_release_from(ok, prefix)
+        if newer:
+            print(f"{pkg}: main moved on; build published newer 0-{newer} "
+                  f"instead of 0-{prefix}")
+            continue
+        left[pkg] = (prefix, [b for b in mine if states.get(b) != "succeeded"])
+    return left
+
+
+def ensure_built(wanted):
+    """wanted: {package: release_prefix}.
+
+    1. Skip packages already published at their release.
+    2. Wait for every build of the rest that is already queued or running
+       (an earlier run's, a manual one), then re-check publication.
+    3. Submit once for what is still missing, wait, re-check publication.
+       A package whose submission was ambiguous is never submitted twice.
+    """
+    errors = {}
+    todo = {}
+    for pkg, prefix in wanted.items():
+        bid = _find_published(pkg, prefix)
+        if bid:
+            print(f"{pkg}: 0-{prefix} already published by build {bid}")
+        else:
+            todo[pkg] = prefix
+
+    builds = {}
+    for pkg in todo:
+        for bid in _in_flight(pkg):
+            print(f"{pkg}: waiting for in-flight build {bid}: "
+                  f"{COPR_URL}/coprs/build/{bid}/")
+            builds[bid] = pkg
+    if builds:
+        states = _wait(builds)
+        left = _settle(wanted, todo, builds, states, errors)
+        todo = {pkg: prefix for pkg, (prefix, _) in left.items()}
+
+    builds = {}
+    for pkg in todo:
+        try:
+            ids, ambiguous = _submit(pkg)
+        except SystemExit as e:
+            errors[pkg] = str(e)  # keep going so every package is reported
+            continue
+        for bid in ids:
+            print(f"{pkg}: {'candidate' if ambiguous else 'submitted'} build "
+                  f"{bid}: {COPR_URL}/coprs/build/{bid}/")
+            builds[bid] = pkg
+    states = _wait(builds)
+    left = _settle(wanted, {p: todo[p] for p in todo if p not in errors},
+                   builds, states, errors)
+    for pkg, (prefix, bad) in left.items():
+        detail = "; ".join(f"build {b} {states.get(b)}: "
+                           f"{COPR_URL}/coprs/build/{b}/" for b in bad)
+        errors[pkg] = (f"0-{prefix} not published"
+                       + (f" ({detail})" if detail else
+                          " although the build succeeded"))
+
+    for pkg, err in errors.items():
+        print(f"::error::{pkg}: {err}")
+    return 1 if errors else 0
+
+
+def _pairs(args):
+    out = {}
     for arg in args:
-        pkg, sep, base = arg.partition("=")
-        if not sep or not pkg or not base.isdigit():
-            raise SystemExit(f"bad PACKAGE=BASELINE_ID argument: {arg!r}")
-        baselines[pkg] = int(base)
-    return baselines
+        pkg, sep, prefix = arg.partition("=")
+        if not sep or not pkg or not prefix:
+            raise SystemExit(f"bad PACKAGE=RELEASE_PREFIX argument: {arg!r}")
+        out[pkg] = prefix
+    return out
 
 
 def main(argv):
-    if len(argv) == 3 and argv[1] == "latest-id":
-        print(latest_id(argv[2]))
-        return 0
-    if len(argv) >= 4 and argv[1] == "wait":
-        sha = argv[2]
-        if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
-            raise SystemExit(f"COMMIT_SHA must be a full 40-char hex SHA: {sha!r}")
-        return wait(sha, _parse_baselines(argv[3:]))
+    if len(argv) == 4 and argv[1] == "release-published":
+        return release_published(argv[2], argv[3])
     if len(argv) == 4 and argv[1] == "has-kernel-build":
         return has_kernel_build(argv[2], argv[3])
+    if len(argv) >= 3 and argv[1] == "ensure-built":
+        return ensure_built(_pairs(argv[2:]))
     print(__doc__, file=sys.stderr)
     return 2
 

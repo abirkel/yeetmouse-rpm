@@ -1,10 +1,16 @@
 name: Poll YeetMouse upstream commit
 
+# When upstream YeetMouse has a new commit, bump the pin and every package's
+# serial on main, then build all three through COPR's API. Every run also
+# builds any package whose current release is not yet published, so a build
+# that failed last time is retried here without anything having to change.
+
 on:
   schedule:
     - cron: '0 */12 * * *'
   workflow_dispatch: {}
 
+# Shared by every workflow that pushes to main or submits COPR builds.
 concurrency:
   group: main-push
   cancel-in-progress: false
@@ -17,6 +23,7 @@ env:
   COPR_OWNER: abirkel
   COPR_PROJECT: yeetmouse
   COPR_URL: https://copr.fedorainfracloud.org
+  COPR_CHROOT: fedora-44-x86_64
 
 jobs:
   poll:
@@ -25,79 +32,70 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # A scheduled run's github.sha is fixed when the run is queued, and
+          # this run can wait behind another one in the group. Read live main.
+          ref: main
           fetch-depth: 0
 
-      - name: Get latest upstream commit
+      - name: Get latest upstream commit and its date
         id: upstream
         run: |
-          sha=$(gh api repos/${UPSTREAM_REPO}/commits/master --jq '.sha')
+          sha=$(gh api "repos/${UPSTREAM_REPO}/commits/master" --jq '.sha')
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Unexpected upstream sha: ${sha}"
+            exit 1
+          fi
+          date=$(gh api "repos/${UPSTREAM_REPO}/commits/${sha}" --jq '.commit.committer.date')
+          # The date is informational only (pkgserial decides ordering), but
+          # still validate it so a bad API answer never reaches a spec.
+          commitdate=$(date -u -d "$date" +%Y%m%d)
+          if ! [[ "$commitdate" =~ ^[0-9]{8}$ ]]; then
+            echo "::error::Could not format upstream commit date: ${date}"
+            exit 1
+          fi
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "commitdate=${commitdate}" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Get currently tracked commit
-        id: current
-        run: |
-          current=$(grep -oP '^YEETMOUSE_COMMIT=\K.*' .external_versions)
-          echo "sha=${current}" >> "$GITHUB_OUTPUT"
-
-      - name: Compare
-        id: compare
-        run: |
-          if [ "${{ steps.upstream.outputs.sha }}" = "${{ steps.current.outputs.sha }}" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Update spec commit pins and .external_versions
-        if: steps.compare.outputs.changed == 'true'
-        run: |
-          new_sha="${{ steps.upstream.outputs.sha }}"
-          short_sha="${new_sha:0:7}"
-          for f in specs/kmod-yeetmouse.spec specs/yeetmouse.spec specs/yeetmouse-gui.spec; do
-            sed -i -E "s/(%global commit %\{\?commit\}%\{!\?commit:)[0-9a-f]+(\})/\1${new_sha}\2/" "$f" || true
-            sed -i -E "s/(%global shortcommit %\{\?shortcommit\}%\{!\?shortcommit:)[0-9a-f]+(\})/\1${short_sha}\2/" "$f" || true
-            sed -i -E "s/^%global commit [0-9a-f]+$/%global commit ${new_sha}/" "$f" || true
-            sed -i -E "s/^%global shortcommit [0-9a-f]+$/%global shortcommit ${short_sha}/" "$f" || true
-          done
-          sed -i -E "s/^YEETMOUSE_COMMIT=.*/YEETMOUSE_COMMIT=${new_sha}/" .external_versions
-
-      - name: Record pre-push COPR build baselines
-        id: baseline
-        if: steps.compare.outputs.changed == 'true'
-        run: |
-          # Newest existing build id per package, taken BEFORE pushing, so the
-          # watcher can only ever pick up a build the webhook queued for our push.
-          for pkg in kmod-yeetmouse yeetmouse yeetmouse-gui; do
-            id=$(python3 .github/scripts/copr_build.py latest-id "$pkg")
-            echo "${pkg//-/_}=${id}" >> "$GITHUB_OUTPUT"
-          done
+      - name: Bump pin and serials, commit and push
         env:
-          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
-          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
-
-      - name: Commit and push
-        id: push
-        if: steps.compare.outputs.changed == 'true'
+          NEW_SHA: ${{ steps.upstream.outputs.sha }}
+          COMMITDATE: ${{ steps.upstream.outputs.commitdate }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add specs/kmod-yeetmouse.spec specs/yeetmouse.spec specs/yeetmouse-gui.spec .external_versions
-          git commit -m "chore: update yeetmouse commit pin to ${{ steps.upstream.outputs.sha }}"
-          git push origin HEAD:main
-          sha=$(git rev-parse HEAD)
-          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          # Decide from the live main on every attempt. If a push is rejected,
+          # start again from the new main and re-apply the bump, so the serial
+          # is always one above whatever main has. Re-applying instead of
+          # rebasing avoids conflicts on the serial lines.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+            current=$(grep -oP '^YEETMOUSE_COMMIT=\K[0-9a-f]{40}$' .external_versions)
+            if [ "$current" = "$NEW_SHA" ]; then
+              echo "main already pins ${NEW_SHA}"
+              exit 0
+            fi
+            python3 .github/scripts/spec_version.py bump-pin "$NEW_SHA" "$COMMITDATE"
+            sed -i -E "s/^YEETMOUSE_COMMIT=.*/YEETMOUSE_COMMIT=${NEW_SHA}/" .external_versions
+            grep -qx "YEETMOUSE_COMMIT=${NEW_SHA}" .external_versions
+            git add specs/kmod-yeetmouse.spec specs/yeetmouse.spec specs/yeetmouse-gui.spec .external_versions
+            git commit -m "chore: update yeetmouse commit pin to ${NEW_SHA}"
+            if git push origin HEAD:refs/heads/main; then
+              exit 0
+            fi
+            echo "push rejected (attempt ${attempt}), retrying from the new main"
+            sleep $((attempt * 10))
+          done
+          echo "::error::Could not push the pin bump after 3 attempts"
+          exit 1
 
-      - name: Wait for Copr webhook builds and report result
-        if: steps.compare.outputs.changed == 'true'
-        run: |
-          # One shared deadline for all three packages; every package is reported
-          # before the step fails. Builds are matched to this push's commit SHA.
-          python3 .github/scripts/copr_build.py wait "${{ steps.push.outputs.sha }}" \
-            "kmod-yeetmouse=${{ steps.baseline.outputs.kmod_yeetmouse }}" \
-            "yeetmouse=${{ steps.baseline.outputs.yeetmouse }}" \
-            "yeetmouse-gui=${{ steps.baseline.outputs.yeetmouse_gui }}"
+      - name: Build every package whose current release is unpublished
         env:
           COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
           COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+        run: |
+          pairs=$(python3 .github/scripts/spec_version.py release-prefixes)
+          # shellcheck disable=SC2086  # pairs is space-separated on purpose
+          python3 .github/scripts/copr_build.py ensure-built $pairs

@@ -10,7 +10,7 @@
 # changes the pin, the kernel poller raises it here for a kernel-only rebuild,
 # and a packaging-only change here must raise it by hand (check-and-build.yml
 # fails the push otherwise). See .github/scripts/spec_version.py.
-%global pkgserial 1
+%global pkgserial 2
 
 Name:           %{kmod_name}-kmod
 Version:        0
@@ -84,31 +84,23 @@ for kernel_version in %{?kernel_versions}; do
         %{buildroot}%{kmodinstdir_prefix}/${kv}%{kmodinstdir_postfix}/%{kmod_name}.ko
 done
 
-# CONFIRMED by direct build-log diagnostic (design doc 3.3, item following the probe
-# failure): Fedora's standard BRP kmod-compression step renames <name>.ko to <name>.ko.xz
-# between %install and %files evaluation. %files must list the compressed name. Confirm this
-# extension against each target Fedora release's actual BRP config rather than assuming .xz
-# is permanent -- Fedora has changed kmod compression algorithms/extensions across releases
-# historically (design doc 4, item 1).
-%files
-%{kmodinstdir_prefix}/*%{kmodinstdir_postfix}/%{kmod_name}.ko.xz
+# No %%files, %%post or %%postun for the main package. kmodtool already generates
+# them for each kmod-yeetmouse-<kernel> package: its %%files owns
+# /lib/modules/<kernel>/extra/yeetmouse/ and its scriptlets run depmod for that
+# kernel. A main-package %%files made rpmbuild emit an extra binary package,
+# yeetmouse-kmod, that shipped the same .ko with no kernel requirement and
+# satisfied yeetmouse-gui's Requires: yeetmouse-kmod on its own. Confirmed on
+# probe build 11104363.
 
 %files -n %{kmod_name}-kmod-common
 # intentionally empty -- this package exists only to satisfy kmodtool's generated Requires
 
-%post
-for kernel_version in %{?kernel_versions}; do
-    /usr/sbin/depmod -a "${kernel_version%%___*}" || :
-done
-
-%postun
-if [ $1 -eq 0 ]; then
-    for kernel_version in %{?kernel_versions}; do
-        /usr/sbin/depmod -a "${kernel_version%%___*}" || :
-    done
-fi
-
 %changelog
+* Sat Oct 10 2026 abirkel - 0-2.20260803git78dcd0d
+- Drop the main package's files list and depmod scriptlets. kmodtool
+  generates both for each kernel package, and the main files list made
+  rpmbuild emit a stray yeetmouse-kmod binary package with the same .ko
+  and no kernel requirement.
 * Sat Oct 10 2026 abirkel - 0-1.20260803git78dcd0d
 - New versioning for the COPR project: Release is pkgserial.commitdate
   git shortcommit, and pkgserial alone orders builds. COPR SCM builds use

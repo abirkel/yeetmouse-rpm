@@ -29,7 +29,7 @@ for attempt in 1 2 3; do
   # Second line of defense: bump-pin is a no-op when the specs already pin
   # NEW_SHA even if .external_versions disagreed. Never commit nothing.
   if git diff --quiet -- "${SPECS[@]}"; then
-    echo "specs already pin ${NEW_SHA}; nothing to commit"
+    echo "specs already pin ${NEW_SHA}, nothing to commit"
     exit 0
   fi
   sed -i -E "s/^YEETMOUSE_COMMIT=.*/YEETMOUSE_COMMIT=${NEW_SHA}/" .external_versions

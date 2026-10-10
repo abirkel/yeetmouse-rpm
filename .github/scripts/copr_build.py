@@ -30,8 +30,9 @@ Subcommands:
       Publication by ANY build counts, so a concurrent build is never
       duplicated. A package whose submission outcome was unknown is never
       submitted twice in one run. A succeeded build that published a HIGHER
-      version-release (main moved on before COPR checked it out) also counts;
-      the newer main's run covers it.
+      version-release also counts. That happens when a newer main revision was
+      built because main changed before COPR checked it out, and that
+      revision's own run covers it.
       Exit 0 only if every package ends up published.
       Packages already published are skipped, so this is safe to run on every
       push and every poll.
@@ -48,6 +49,7 @@ Environment:
 """
 
 import base64
+import datetime
 import json
 import os
 import re
@@ -176,10 +178,18 @@ EVR_RE = re.compile(r"0\^([0-9]{8})git([0-9a-f]{7,10})-([1-9][0-9]*)")
 VERSION_RE = re.compile(r"0\^([0-9]{8})git([0-9a-f]{7,10})")
 
 
+def _valid_date(s):
+    try:
+        datetime.datetime.strptime(s, "%Y%m%d")
+    except ValueError:
+        return False
+    return True
+
+
 def parse_evr(evr):
     """'0^20260803git78dcd0d-1' -> structured fields. Exits on anything else."""
     m = EVR_RE.fullmatch(evr)
-    if not m:
+    if not m or not _valid_date(m.group(1)):
         raise SystemExit(f"bad VERSION-RELEASE {evr!r}, expected "
                          f"0^<YYYYMMDD>git<shortcommit>-<N>")
     version, release = evr.rsplit("-", 1)
@@ -193,7 +203,7 @@ def _dist():
     # fcNN. Anything else fails closed rather than matching loosely.
     m = re.fullmatch(r"fedora-([0-9]+)-x86_64", CHROOT)
     if not m:
-        raise SystemExit(f"unsupported COPR_CHROOT {CHROOT!r}; expected "
+        raise SystemExit(f"unsupported COPR_CHROOT {CHROOT!r}, expected "
                          f"fedora-NN-x86_64")
     return f"fc{m.group(1)}"
 
@@ -348,8 +358,9 @@ def _is_newer(p, want):
 
 def _newer_release_from(build_ids, want):
     """A version-release HIGHER than WANT published by one of these succeeded
-    builds, or None. That happens when main moved on between our read and
-    COPR's checkout; the newer main's own run covers it."""
+    builds, or None. That happens when a newer main revision was built
+    because main changed between our read and COPR's checkout. That
+    revision's own run covers it."""
     for bid in build_ids:
         for p in _built(bid):
             if _is_newer(p, want):
@@ -376,7 +387,7 @@ def _settle(wanted, todo, builds, states, errors):
         ok = [b for b in mine if states.get(b) == "succeeded"]
         newer = _newer_release_from(ok, want)
         if newer:
-            print(f"{pkg}: main moved on; build published newer {newer} "
+            print(f"{pkg}: a newer main revision was built and published {newer} "
                   f"instead of {want['evr']}")
             continue
         left[pkg] = (want, [b for b in mine if states.get(b) != "succeeded"])

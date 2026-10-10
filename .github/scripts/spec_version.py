@@ -2,8 +2,8 @@
 """Read, bump and check the version fields of this repo's three specs.
 
 Every spec carries exactly one of each of these lines (Fedora Versioning
-guidelines, Snapshots, form <date><scm><revision>; upstream has no releases,
-so the base version is 0):
+guidelines, Snapshots, form <date><scm><revision>. Upstream has no
+releases, so the base version is 0):
 
   %global commit %{?commit}%{!?commit:<40-hex upstream sha>}
   %global shortcommit %{?shortcommit}%{!?shortcommit:<7-10 hex>}
@@ -347,7 +347,7 @@ def check_bump(base):
                 parse_legacy(old_text, where)
             except SpecError as legacy_err:
                 errors.append(f"{pkg}: cannot read the base spec in either "
-                              f"format ({current_err}; {legacy_err})")
+                              f"format ({current_err}. {legacy_err})")
                 continue
             # rpm sorts 0^<anything> above 0, whatever the old Release was.
             print(f"{pkg}: base uses the previous pkgserial format, "

@@ -246,7 +246,7 @@ class CompareTest(unittest.TestCase):
 
     def test_matches_rpm_where_available(self):
         """Cross-check compare() against rpm's own ordering when the rpm
-        Python bindings exist (Fedora toolbox); skipped on the CI runner."""
+        Python bindings exist (Fedora toolbox). It is skipped on the CI runner."""
         try:
             import rpm
         except ImportError:

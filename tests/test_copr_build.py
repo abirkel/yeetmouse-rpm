@@ -56,7 +56,8 @@ class MatchingTest(unittest.TestCase):
         self.assertEqual((w["version"], w["release"], w["snapdate"], w["rel"]),
                          (V, "3", "20260803", 3))
         for bad in ("0-1", f"{V}", f"{V}-0", "0^2026083git78dcd0d-1",
-                    "1^20260803git78dcd0d-1", "0-2.20260803git78dcd0d"):
+                    "1^20260803git78dcd0d-1", "0-2.20260803git78dcd0d",
+                    "0^20261332git78dcd0d-1"):
             with self.subTest(bad):
                 with self.assertRaises(SystemExit):
                     self.cb.parse_evr(bad)
@@ -115,6 +116,90 @@ class MatchingTest(unittest.TestCase):
         for bid in (3, 4, 5):
             with self.subTest(bid):
                 self.assertIsNone(self.cb._newer_release_from([bid], want))
+
+
+class EnsureBuiltTest(unittest.TestCase):
+    """ensure_built's control flow with COPR replaced by fakes."""
+
+    def setUp(self):
+        self.cb = helpers.load("copr_build", ENV)
+        self.want = {"yeetmouse": self.cb.parse_evr(f"{V}-1")}
+        self.published = set()   # packages that count as published
+        self.in_flight = []      # build ids already running
+        self.submits = []        # packages submitted
+        self.final_state = "succeeded"
+        self.on_success = None   # callable run when a wait sees success
+        self.built = {}
+        cb = self.cb
+        cb._find_published = lambda p, w, name=None: 99 if p in self.published else 0
+        cb._in_flight = lambda p: list(self.in_flight)
+        cb._built = lambda bid: self.built.get(bid, [])
+
+        def submit(p):
+            self.submits.append(p)
+            return [500 + len(self.submits)], False
+        cb._submit = submit
+
+        def wait(builds):
+            if self.final_state == "succeeded" and self.on_success:
+                self.on_success()
+            return {b: self.final_state for b in builds}
+        cb._wait = wait
+
+    def run_it(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(io.StringIO()):
+            rc = self.cb.ensure_built(self.want)
+        return rc, out.getvalue()
+
+    def test_already_published_submits_nothing(self):
+        self.published.add("yeetmouse")
+        rc, out = self.run_it()
+        self.assertEqual((rc, self.submits), (0, []))
+        self.assertIn("already published", out)
+
+    def test_submits_once_and_succeeds(self):
+        self.on_success = lambda: self.published.add("yeetmouse")
+        rc, _ = self.run_it()
+        self.assertEqual((rc, self.submits), (0, ["yeetmouse"]))
+
+    def test_in_flight_build_is_waited_for_not_duplicated(self):
+        self.in_flight = [400]
+        self.on_success = lambda: self.published.add("yeetmouse")
+        rc, out = self.run_it()
+        self.assertEqual((rc, self.submits), (0, []))
+        self.assertIn("waiting for in-flight build 400", out)
+
+    def test_failed_build_reports_error(self):
+        self.final_state = "failed"
+        rc, out = self.run_it()
+        self.assertEqual((rc, self.submits), (1, ["yeetmouse"]))
+        self.assertIn(f"::error::yeetmouse: {V}-1 not published", out)
+
+    def test_timeout_reports_still_running(self):
+        self.final_state = "running"
+        rc, out = self.run_it()
+        self.assertEqual(rc, 1)
+        self.assertIn("still running", out)
+
+    def test_success_that_published_something_else_is_an_error(self):
+        self.built = {501: [pkg("yeetmouse", V, "1.fc44", "src")]}
+        rc, out = self.run_it()
+        self.assertEqual(rc, 1)
+        self.assertIn("although the build succeeded", out)
+
+    def test_newer_main_revision_counts(self):
+        self.built = {501: [pkg("yeetmouse", "0^20260804gitaaaaaaa", "1.fc44")]}
+        rc, out = self.run_it()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("a newer main revision was built", out)
+
+    def test_bad_pair_argument(self):
+        for arg in ("yeetmouse", "yeetmouse=", "=0^20260803git78dcd0d-1", "yeetmouse=0-1"):
+            with self.subTest(arg):
+                with self.assertRaises(SystemExit):
+                    self.cb._pairs([arg])
 
 
 class ChrootTest(unittest.TestCase):

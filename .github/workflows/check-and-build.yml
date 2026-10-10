@@ -1,0 +1,89 @@
+name: Check serials and build
+
+# On every push or PR to main, fail when a package's build inputs changed
+# without its %global pkgserial going up. Without the bump the change would be
+# built at a version dnf already has, so it would never be installed.
+#
+# On a push that passes, build every package whose current release is not yet
+# published, through COPR's API. A push that only touches docs or workflows
+# leaves every release unchanged and builds nothing.
+#
+# Pushes made by the poller workflows use GITHUB_TOKEN, which never triggers
+# other workflows, so this does not run for them. The pollers bump serials
+# through spec_version.py, which verifies every edit, and build for themselves.
+# A failed run sends GitHub's usual failure email.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  COPR_OWNER: abirkel
+  COPR_PROJECT: yeetmouse
+  COPR_URL: https://copr.fedorainfracloud.org
+  COPR_CHROOT: fedora-44-x86_64
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick the base revision
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            base=$(git merge-base "$PR_BASE" HEAD)
+          elif [ -n "$BEFORE" ] && ! [[ "$BEFORE" =~ ^0+$ ]] \
+               && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            base="$BEFORE"
+          else
+            # Branch creation or a force-push whose old head is not
+            # fetchable. Comparing against HEAD~1 would miss unbumped changes
+            # in earlier commits of the replacement history, so fail closed
+            # and leave the call to a human.
+            echo "::error::Cannot resolve the pre-push commit (${BEFORE:-none}). Check by hand that every package whose inputs changed has a higher pkgserial than what COPR last published, then run 'Poll YeetMouse upstream commit' by hand to build."
+            exit 1
+          fi
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+
+      - name: Require a pkgserial bump for every changed package
+        run: python3 .github/scripts/spec_version.py check-bump "${{ steps.base.outputs.base }}"
+
+  build:
+    needs: check
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Shared by every workflow that pushes to main or submits COPR builds.
+    concurrency:
+      group: main-push
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Build what main is now. If main moved on while this job waited,
+          # the newer main's own run builds it too, and ensure-built skips
+          # anything already published.
+          ref: main
+
+      - name: Build every package whose current release is unpublished
+        env:
+          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+        run: |
+          pairs=$(python3 .github/scripts/spec_version.py release-prefixes)
+          # shellcheck disable=SC2086  # pairs is space-separated on purpose
+          python3 .github/scripts/copr_build.py ensure-built $pairs

@@ -1,0 +1,133 @@
+name: Poll Fedora kernel version for kmod-yeetmouse
+
+# When Fedora ships a kernel that has no kmod-yeetmouse build at the current
+# kmod release, bump the kmod serial (only when that release is already
+# published), push, and build kmod-yeetmouse alone through COPR's API.
+#
+# The serial bump matters because yeetmouse-kmod-common is noarch and has the
+# same NEVR for every kernel. Rebuilding it at a published release would
+# publish a duplicate NEVR, and COPR drops a NEVR entirely when the newest of
+# its duplicate builds is deleted.
+
+on:
+  schedule:
+    - cron: '30 */12 * * *'
+  workflow_dispatch: {}
+
+# Shared by every workflow that pushes to main or submits COPR builds.
+concurrency:
+  group: main-push
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  COPR_OWNER: abirkel
+  COPR_PROJECT: yeetmouse
+  COPR_URL: https://copr.fedorainfracloud.org
+  COPR_CHROOT: fedora-44-x86_64
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    steps:
+      - name: Install git and tooling
+        run: dnf -y install git python3
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # A scheduled run's github.sha is fixed when the run is queued, and
+          # this run can wait behind another one in the group. Read live main.
+          ref: main
+          fetch-depth: 0
+
+      - name: Get current stable kernel-devel NVR
+        id: kernel
+        run: |
+          dnf -y makecache
+          nvr=$(dnf repoquery --quiet --latest-limit=1 --qf '%{version}-%{release}.%{arch}' kernel-devel | tail -n1)
+          if [ -z "$nvr" ]; then
+            echo "::error::Could not resolve current kernel-devel NVR"
+            exit 1
+          fi
+          # Same strict check the old scripts/resolve-kernel-version.sh used.
+          if ! [[ "$nvr" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9a-z.]+\.fc[0-9]+\.[a-z0-9_]+$ ]]; then
+            echo "::error::Resolved kernel-devel NVR has unexpected format: ${nvr}"
+            echo "::error::Expected format: X.Y.Z-RELEASE.fcVERSION.ARCH (e.g. 7.2.9-200.fc44.x86_64)"
+            exit 1
+          fi
+          # Advisory only: kmod-yeetmouse.spec resolves kernel-devel itself at
+          # COPR build time. A mirror-sync gap can make the two disagree for a
+          # cycle, which the final check below catches.
+          echo "nvr=${nvr}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump the kmod serial if this kernel needs a build at a published release
+        id: bump
+        env:
+          NVR: ${{ steps.kernel.outputs.nvr }}
+          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Every exit path writes the step output exactly once, via finish.
+          finish() { echo "needed=$1" >> "$GITHUB_OUTPUT"; exit 0; }
+          # Decide from the live main on every attempt. If a push is rejected,
+          # start again from the new main, so a concurrent human bump is
+          # neither lost nor doubled.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+            prefix=$(python3 .github/scripts/spec_version.py release-prefix specs/kmod-yeetmouse.spec)
+            found=$(python3 .github/scripts/copr_build.py has-kernel-build "$NVR" "$prefix")
+            if [ "$found" = "true" ]; then
+              echo "kmod-yeetmouse-${NVR} already built at 0-${prefix}"
+              finish false
+            fi
+            published=$(python3 .github/scripts/copr_build.py release-published kmod-yeetmouse "$prefix")
+            if [ "$published" = "false" ]; then
+              # Nothing was ever published at this release (first build, or
+              # earlier attempts failed), so building it adds no duplicate.
+              echo "release ${prefix} is unpublished, building it without a bump"
+              finish true
+            fi
+            python3 .github/scripts/spec_version.py bump-serial kmod-yeetmouse
+            git add specs/kmod-yeetmouse.spec
+            git commit -m "chore: bump kmod-yeetmouse serial to build for kernel-devel ${NVR}"
+            if git push origin HEAD:refs/heads/main; then
+              finish true
+            fi
+            echo "push rejected (attempt ${attempt}), retrying from the new main"
+            sleep $((attempt * 10))
+          done
+          echo "::error::Could not push the kmod serial bump after 3 attempts"
+          exit 1
+
+      - name: Build kmod-yeetmouse
+        if: steps.bump.outputs.needed == 'true'
+        env:
+          COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
+          COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
+        run: |
+          prefix=$(python3 .github/scripts/spec_version.py release-prefix specs/kmod-yeetmouse.spec)
+          python3 .github/scripts/copr_build.py ensure-built "kmod-yeetmouse=${prefix}"
+
+      - name: Confirm the build is for this kernel
+        if: steps.bump.outputs.needed == 'true'
+        env:
+          NVR: ${{ steps.kernel.outputs.nvr }}
+        run: |
+          # COPR's chroot can lag the mirror this container used, and then the
+          # build succeeds for the previous kernel. Fail so the email goes out;
+          # the next run bumps again and retries.
+          prefix=$(python3 .github/scripts/spec_version.py release-prefix specs/kmod-yeetmouse.spec)
+          found=$(python3 .github/scripts/copr_build.py has-kernel-build "$NVR" "$prefix")
+          if [ "$found" != "true" ]; then
+            echo "::error::No kmod-yeetmouse-${NVR}-0-${prefix} after the build. COPR's chroot probably has an older kernel-devel. The next run retries."
+            exit 1
+          fi

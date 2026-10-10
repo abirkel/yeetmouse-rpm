@@ -1,13 +1,15 @@
 %global debug_package %{nil}
-%global commit %{?commit}%{!?commit:99844bbd786d612657d892cac2f663d940fd3d62}
-%global shortcommit %{?shortcommit}%{!?shortcommit:99844bb}
+%global commit %{?commit}%{!?commit:78dcd0d573bedd5dd7b9e29e9162b28c9eb2fd7b}
+%global shortcommit %{?shortcommit}%{!?shortcommit:78dcd0d}
+# Upstream committer date (UTC) of the pinned commit. Informational only.
+%global commitdate 20260803
+# Build order counter, only ever raised. See kmod-yeetmouse.spec and
+# .github/scripts/spec_version.py.
+%global pkgserial 1
 
 Name:           yeetmouse
 Version:        0
-Release:        %{?release}%{!?release:1}%{?dist}
-# Epoch: see kmod-yeetmouse.spec's comment and design doc Section 3.5 -- bump both specs'
-# Epoch together at the actual COPR cutover point, not just this one.
-# Epoch:          1
+Release:        %{pkgserial}.%{commitdate}git%{shortcommit}%{?dist}
 Summary:        CLI tool and systemd service for YeetMouse mouse acceleration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -19,19 +21,16 @@ Source4:        yeetmouse.conf
 
 BuildRequires:  gcc-c++
 BuildRequires:  make
-BuildRequires:  glfw-devel
-BuildRequires:  mesa-libGL-devel
 BuildRequires:  systemd-rpm-macros
-Requires:       glfw
-Requires:       mesa-libGL
 %{?systemd_requires}
 %{?sysusers_requires_compat}
 
 %description
-Userspace components for the YeetMouse mouse acceleration driver. Includes:
+Userspace CLI tool and systemd service for the YeetMouse mouse acceleration driver. Includes:
 - yeetmousectl: CLI tool to apply and save acceleration settings
-- yeetmouse-gui: graphical configuration interface
 - yeetmouse.service: systemd service that applies /etc/yeetmouse.conf at boot
+
+The graphical configuration interface is packaged separately as yeetmouse-gui.
 
 /etc/yeetmouse.conf is owned by THIS package, not any kmod-yeetmouse-<kernel-version>
 subpackage (see design doc Section 3.3b, confirmed by a real multi-package install test):
@@ -43,13 +42,10 @@ window, and a shared config file must not be claimed by more than one of them.
 
 %build
 make yeetmousectl
-make GUI
 
 %install
 install -D -m 755 tools/yeetmousectl/yeetmousectl \
     %{buildroot}%{_bindir}/yeetmousectl
-install -D -m 755 gui/YeetMouseGui \
-    %{buildroot}%{_bindir}/yeetmouse-gui
 install -D -m 644 %{SOURCE1} \
     %{buildroot}%{_unitdir}/yeetmouse.service
 install -D -m 644 %{SOURCE2} \
@@ -73,13 +69,27 @@ install -D -m 644 %{SOURCE4} \
 
 %files
 %{_bindir}/yeetmousectl
-%{_bindir}/yeetmouse-gui
 %{_unitdir}/yeetmouse.service
 %{_prefix}/lib/systemd/system-preset/50-yeetmouse.preset
 %{_sysusersdir}/yeetmouse.conf
 %config(noreplace) /etc/yeetmouse.conf
 
 %changelog
+* Sat Oct 10 2026 abirkel - 0-1.20260803git78dcd0d
+- New versioning for the COPR project, same scheme as kmod-yeetmouse:
+  Release is pkgserial.commitdate git shortcommit, no Epoch. The Epoch
+  bump planned in the 0-4 entry below was dropped.
+* Thu Oct 08 2026 abirkel - 0-5
+- Split the GUI back out into its own yeetmouse-gui package: this package shipping
+  /usr/bin/yeetmouse-gui at the same time as a separate yeetmouse-gui package was a real
+  RPM file-ownership conflict (yeetmouse-gui.spec, orphaned since before the COPR migration,
+  claims the same path). Reviewed by gpt-5.6-terra (option (a): CLI-only, GUI is
+  yeetmouse-gui's sole responsibility). Dropped the GUI build/install lines, the GUI entry
+  from the files list, and the glfw/mesa-libGL BuildRequires/Requires that existed only for
+  it -- confirmed safe by reading ConfigHelper.cpp/DriverHelper.cpp/CustomCurve.cpp directly,
+  none include GL/GLFW headers. Also bumped the stale commit pin (99844bb, pre-dates
+  upstream's tools/yeetmousectl/ restructuring) to 78dcd0d5, the commit this repo's own
+  version-tracking already uses.
 * Sun Oct 04 2026 abirkel - 0-4
 - Move /etc/yeetmouse.conf ownership here from kmod-yeetmouse (design doc Section 3.3b):
   confirmed by a real multi-package install test that the old per-kernel-subpackage ownership

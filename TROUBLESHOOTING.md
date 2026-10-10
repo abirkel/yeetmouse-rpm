@@ -2,32 +2,39 @@
 
 This guide covers common issues you may encounter when installing or using YeetMouse RPM packages.
 
+Three packages are published: `kmod-yeetmouse` (the kernel module, built per-kernel-version
+via COPR/kmodtool), `yeetmouse` (the `yeetmousectl` CLI and the systemd service that applies
+`/etc/yeetmouse.conf` at boot), and `yeetmouse-gui` (the graphical configuration tool). There
+is no `akmod-yeetmouse` package -- akmod support was deliberately removed from this project in
+favor of prebuilt COPR kmod packages, since the target systems (Fedora Atomic/rpm-ostree) have
+no local compiler toolchain for akmod to build against.
+
 ## Kernel Module Not Loading
 
 **Problem**: The yeetmouse module doesn't appear in `lsmod` output.
 
 **Solutions**:
 ```bash
-# Check if akmod build completed successfully
-sudo akmods --force --kernel $(uname -r)
-
-# Check akmod logs
-sudo journalctl -u akmods
+# Confirm the kmod package for your exact running kernel is installed
+rpm -qa | grep kmod-yeetmouse
+uname -r
 
 # Manually load the module
 sudo modprobe yeetmouse
 
-# Check for build errors
-ls -l /usr/src/akmods/yeetmouse-kmod-*/
-
-# Verify the module file exists
+# Verify the module file exists for your kernel version
 ls -l /lib/modules/$(uname -r)/extra/yeetmouse.ko*
+
+# Check dmesg for module load errors
+sudo dmesg | grep -i yeetmouse
 ```
 
 **Common Causes**:
-- Akmod build failed due to missing kernel-devel
-- Secure Boot is enabled (unsigned modules cannot load)
-- Module build is still in progress (wait a few minutes after installation)
+- No `kmod-yeetmouse` build exists yet for your exact kernel version (check the repo for a
+  newer package, or wait for the next automated rebuild)
+- Secure Boot is enabled (unsigned modules cannot load, see the Secure Boot section below)
+- The `yeetmouse-kmod-common` metadata package is missing (required alongside the per-kernel
+  subpackage; `sudo dnf install yeetmouse-kmod-common` if `dnf` reports a missing dependency)
 
 ## GUI Permission Issues
 
@@ -50,7 +57,10 @@ lsmod | grep yeetmouse
 ls -l /sys/module/yeetmouse/parameters/
 ```
 
-**Why sudo is required**: The YeetMouse GUI needs root privileges to write to kernel module parameters in `/sys/module/yeetmouse/parameters/`.
+**Why sudo is required**: The YeetMouse GUI needs root privileges to write to kernel module
+parameters in `/sys/module/yeetmouse/parameters/`. Saving a config persistently also shells
+out to `yeetmousectl` via `pkexec` (see the `yeetmouse` package's `yeetmousectl`), so that
+package must be installed alongside `yeetmouse-gui`.
 
 ## Package Installation Fails
 
@@ -58,74 +68,35 @@ ls -l /sys/module/yeetmouse/parameters/
 
 **Solutions**:
 ```bash
-# Verify repository is configured
-cat /etc/yum.repos.d/abirkel-stable.repo
+# Verify the COPR repository is configured and enabled
+sudo dnf repolist | grep -i yeetmouse
 
-# Check repository is enabled
-sudo dnf repolist | grep yeetmouse
+# Re-enable it if missing
+sudo dnf copr enable abirkel/yeetmouse
 
 # Clear DNF cache and retry
 sudo dnf clean all
 sudo dnf makecache
 
-# If GPG verification fails, manually import the key
-sudo rpm --import https://raw.githubusercontent.com/abirkel/yeetmouse-rpm/main/RPM-GPG-KEY-yeetmouse
-
-# Try installing again
-sudo dnf install akmod-yeetmouse yeetmouse-gui
+# Install the kmod for your running kernel, the CLI and the GUI
+sudo dnf install "kmod-yeetmouse-$(uname -r)" yeetmouse yeetmouse-gui
 ```
+
+COPR signs every package with the project's own key, and `dnf` imports it on first install.
 
 ## Kernel Update Breaks Module
 
 **Problem**: After a kernel update, yeetmouse stops working.
 
 **Solutions**:
-
-**If using akmod** (recommended):
-```bash
-# The akmod should rebuild automatically, but you can force it
-sudo akmods --force --kernel $(uname -r)
-
-# Check if the module exists for your kernel
-ls -l /lib/modules/$(uname -r)/extra/yeetmouse.ko*
-
-# Reboot if necessary
-sudo reboot
-```
-
-**If using kmod**:
 ```bash
 # Check if a kmod package exists for your new kernel
-dnf list available | grep kmod-yeetmouse
+dnf list --available "kmod-yeetmouse-$(uname -r)"
 
-# If available, update to the new kmod
-sudo dnf update kmod-yeetmouse
+# If available, install it (each kernel has its own kmod package)
+sudo dnf install "kmod-yeetmouse-$(uname -r)"
 
-# If not available, switch to akmod
-sudo dnf remove kmod-yeetmouse
-sudo dnf install akmod-yeetmouse
-```
-
-## Akmod Build Failures
-
-**Problem**: Akmod fails to build the kernel module.
-
-**Solutions**:
-```bash
-# Install kernel-devel for your kernel
-sudo dnf install kernel-devel-$(uname -r)
-
-# If kernel-devel is not available, update your kernel
-sudo dnf update kernel kernel-devel
-
-# Force akmod rebuild
-sudo akmods --force --kernel $(uname -r)
-
-# Check build logs for errors
-sudo journalctl -u akmods -n 100
-
-# Verify gcc and make are installed
-sudo dnf install gcc make
+# If not available yet, check back after the next scheduled rebuild (every 12 hours)
 ```
 
 ## GUI Display Issues
@@ -202,12 +173,13 @@ sudo /usr/src/kernels/$(uname -r)/scripts/sign-file \
 
 ## Checking Build Status
 
-To check the status of package builds in this repository:
+Packages are built on [COPR](https://copr.fedorainfracloud.org/coprs/abirkel/yeetmouse/), not
+GitHub Actions. To check build status:
 
-1. Visit the [Actions tab](https://github.com/abirkel/yeetmouse-rpm/actions) on GitHub
-2. Look for the latest "Build and Publish RPM Packages" workflow run
-3. Check the workflow logs for any build errors
-4. Verify the latest release in the [Releases section](https://github.com/abirkel/yeetmouse-rpm/releases)
+1. Visit the project's COPR page and open the Builds tab
+2. Check the latest build's status for each of the three packages
+   (`kmod-yeetmouse`, `yeetmouse`, `yeetmouse-gui`)
+3. Click into a build to view its SRPM and per-chroot build logs if something failed
 
 ## Package Version Mismatch
 
@@ -219,10 +191,10 @@ To check the status of package builds in this repository:
 rpm -qa | grep yeetmouse
 
 # Update all yeetmouse packages together
-sudo dnf update akmod-yeetmouse yeetmouse-gui
+sudo dnf update 'kmod-yeetmouse-*' yeetmouse-kmod-common yeetmouse yeetmouse-gui
 
-# Or reinstall to ensure consistency
-sudo dnf reinstall akmod-yeetmouse yeetmouse-gui
+# Or reinstall the kmod for your running kernel together with the rest
+sudo dnf reinstall "kmod-yeetmouse-$(uname -r)" yeetmouse-kmod-common yeetmouse yeetmouse-gui
 ```
 
 ## Uninstalling YeetMouse
@@ -234,13 +206,10 @@ If you need to completely remove YeetMouse:
 sudo modprobe -r yeetmouse
 
 # Remove packages
-sudo dnf remove akmod-yeetmouse kmod-yeetmouse yeetmouse-gui
+sudo dnf remove 'kmod-yeetmouse-*' yeetmouse-kmod-common yeetmouse yeetmouse-gui
 
-# Remove repository configuration (optional)
-sudo rm /etc/yum.repos.d/abirkel-stable.repo
-
-# Clean up any remaining files
-sudo rm -rf /usr/src/akmods/yeetmouse-kmod-*
+# Remove the COPR repository (optional)
+sudo dnf copr remove abirkel/yeetmouse
 ```
 
 ## Reporting Issues
@@ -253,8 +222,7 @@ If you encounter problems not covered here:
    - Your Fedora version (`cat /etc/fedora-release`)
    - Kernel version (`uname -r`)
    - Package versions (`rpm -qa | grep yeetmouse`)
-   - Whether you're using akmod or kmod
-   - Relevant log output (`sudo journalctl -u akmods`, `dmesg | grep yeetmouse`)
+   - Relevant log output (`sudo dmesg | grep -i yeetmouse`)
    - Steps to reproduce the problem
 
 ## Additional Resources

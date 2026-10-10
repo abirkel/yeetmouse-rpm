@@ -1,15 +1,19 @@
 %global debug_package %{nil}
 %global commit %{?commit}%{!?commit:78dcd0d573bedd5dd7b9e29e9162b28c9eb2fd7b}
 %global shortcommit %{?shortcommit}%{!?shortcommit:78dcd0d}
-# Upstream committer date (UTC) of the pinned commit. Informational only.
-%global commitdate 20260803
-# Build order counter, only ever raised. See kmod-yeetmouse.spec and
+# Snapshot version, Fedora Versioning guidelines (Snapshots):
+# Version is 0^<upstream committer date, UTC, YYYYMMDD>git<shortcommit>
+# (upstream has no releases, so the base is 0). Release counts packaging
+# changes for one Version and goes back to 1 when the pin changes. The
+# upstream poller sets snapdate and the pin, the kernel poller raises the
+# kmod Release, and a packaging-only change raises Release by hand
+# (check-and-build.yml fails the push otherwise). See
 # .github/scripts/spec_version.py.
-%global pkgserial 1
+%global snapdate 20260803
 
 Name:           yeetmouse
-Version:        0
-Release:        %{pkgserial}.%{commitdate}git%{shortcommit}%{?dist}
+Version:        0^%{snapdate}git%{shortcommit}
+Release:        1%{?dist}
 Summary:        CLI tool and systemd service for YeetMouse mouse acceleration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -75,6 +79,12 @@ install -D -m 644 %{SOURCE4} \
 %config(noreplace) /etc/yeetmouse.conf
 
 %changelog
+* Sat Oct 10 2026 abirkel - 0^20260803git78dcd0d-1
+- Switch to Fedora snapshot versioning: Version is
+  0^<snapshot date>git<shortcommit> and Release is a packaging counter
+  that goes back to 1 when the pin changes. This replaces the pkgserial
+  scheme below.
+
 * Sat Oct 10 2026 abirkel - 0-1.20260803git78dcd0d
 - New versioning for the COPR project, same scheme as kmod-yeetmouse:
   Release is pkgserial.commitdate git shortcommit, no Epoch. The Epoch

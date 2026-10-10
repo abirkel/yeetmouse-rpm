@@ -7,27 +7,31 @@ rebuilt every package on every push, republishing unchanged versions. COPR
 serves the newest of two same-NEVRA builds, and deleting that newest one drops
 the NEVRA from the repo with no fallback (fedora-copr/copr#3262).
 
-A package's "current release" is the Release in its spec without the dist tag,
-as printed by `spec_version.py release-prefix`, e.g. "3.20260803git78dcd0d".
-Every package is Version 0.
+A package's "current version-release" is Version and Release from its spec,
+without the dist tag, as printed by `spec_version.py evr`, for example
+"0^20260803git78dcd0d-1" (Fedora snapshot form). A build publishes it when a
+binary package (not the src record) has exactly that Version and exactly that
+Release plus the chroot's dist tag (fcNN from COPR_CHROOT=fedora-NN-x86_64).
 
 Subcommands:
-  release-published PACKAGE RELEASE_PREFIX
-      Print "true" if a succeeded build of PACKAGE produced any binary package
-      at version 0 and RELEASE_PREFIX, else "false".
+  release-published PACKAGE VERSION-RELEASE
+      Print "true" if a succeeded build of PACKAGE produced a binary package
+      at VERSION-RELEASE, else "false".
 
-  has-kernel-build KERNEL_NVR RELEASE_PREFIX
-      Print "true" if a succeeded kmod-yeetmouse build produced
-      kmod-yeetmouse-KERNEL_NVR at version 0 and RELEASE_PREFIX, else "false".
+  has-kernel-build KERNEL_NVR VERSION-RELEASE
+      Print "true" if a succeeded kmod-yeetmouse build produced the binary
+      package kmod-yeetmouse-KERNEL_NVR at VERSION-RELEASE, else "false".
+      yeetmouse-kmod-common never satisfies this.
 
-  ensure-built PACKAGE=RELEASE_PREFIX [PACKAGE=RELEASE_PREFIX ...]
-      For every PACKAGE whose current release is not yet published: wait for
-      every build of it already queued or running, re-check, then submit one
-      build for what is still missing, wait, and re-check. Publication by ANY
-      build counts, so a concurrent build is never duplicated. A package whose
-      submission outcome was unknown is never submitted twice in one run.
-      A succeeded build that published a HIGHER serial (main moved on before
-      COPR checked it out) also counts; the newer main's run covers it.
+  ensure-built PACKAGE=VERSION-RELEASE [PACKAGE=VERSION-RELEASE ...]
+      For every PACKAGE whose current version-release is not yet published:
+      wait for every build of it already queued or running, re-check, then
+      submit one build for what is still missing, wait, and re-check.
+      Publication by ANY build counts, so a concurrent build is never
+      duplicated. A package whose submission outcome was unknown is never
+      submitted twice in one run. A succeeded build that published a HIGHER
+      version-release (main moved on before COPR checked it out) also counts;
+      the newer main's run covers it.
       Exit 0 only if every package ends up published.
       Packages already published are skipped, so this is safe to run on every
       push and every poll.
@@ -168,13 +172,43 @@ def _iter_builds(package, status=None):
         offset += PAGE_SIZE
 
 
-def _release_matches(release, prefix):
-    # release is "<prefix>.<dist>", e.g. "3.20260803git78dcd0d.fc44". This
-    # project only targets fedora-*-x86_64 chroots, whose dist is "fcNN".
-    # A new chroot family with another dist format must update this check.
-    if not release.startswith(prefix + "."):
-        return False
-    return re.fullmatch(r"fc[0-9]+", release[len(prefix) + 1:]) is not None
+EVR_RE = re.compile(r"0\^([0-9]{8})git([0-9a-f]{7,10})-([1-9][0-9]*)")
+VERSION_RE = re.compile(r"0\^([0-9]{8})git([0-9a-f]{7,10})")
+
+
+def parse_evr(evr):
+    """'0^20260803git78dcd0d-1' -> structured fields. Exits on anything else."""
+    m = EVR_RE.fullmatch(evr)
+    if not m:
+        raise SystemExit(f"bad VERSION-RELEASE {evr!r}, expected "
+                         f"0^<YYYYMMDD>git<shortcommit>-<N>")
+    version, release = evr.rsplit("-", 1)
+    return {"evr": evr, "version": version, "release": release,
+            "snapdate": m.group(1),
+            "shortcommit": m.group(2), "rel": int(m.group(3))}
+
+
+def _dist():
+    # This project only targets fedora-NN-x86_64 chroots, whose dist tag is
+    # fcNN. Anything else fails closed rather than matching loosely.
+    m = re.fullmatch(r"fedora-([0-9]+)-x86_64", CHROOT)
+    if not m:
+        raise SystemExit(f"unsupported COPR_CHROOT {CHROOT!r}; expected "
+                         f"fedora-NN-x86_64")
+    return f"fc{m.group(1)}"
+
+
+def _is_binary(p):
+    return p.get("arch") not in (None, "", "src")
+
+
+def _pkg_matches(p, want, name=None):
+    """True if built-package record P is a binary package at exactly WANT's
+    version and release (plus dist), named NAME when given."""
+    return (_is_binary(p)
+            and p.get("version") == want["version"]
+            and p.get("release") == f"{want['release']}.{_dist()}"
+            and (name is None or p.get("name") == name))
 
 
 _built_cache = {}
@@ -192,38 +226,37 @@ def _built(build_id):
     return _built_cache[build_id]
 
 
-def _build_has(build_id, prefix, name=None):
-    """True if build BUILD_ID produced a package at version 0 and PREFIX
-    (named NAME, when given)."""
-    return any(p.get("version") == "0"
-               and _release_matches(p.get("release", ""), prefix)
-               and (name is None or p.get("name") == name)
-               for p in _built(build_id))
+def _build_has(build_id, want, name=None):
+    """True if build BUILD_ID produced a binary package at WANT (named NAME,
+    when given)."""
+    return any(_pkg_matches(p, want, name) for p in _built(build_id))
 
 
-def _find_published(package, prefix, name=None):
+def _find_published(package, want, name=None):
     for build in _iter_builds(package, status="succeeded"):
         # Re-check state client-side in case the server ignores the filter.
         if build.get("state") != "succeeded":
             continue
-        if _build_has(build["id"], prefix, name):
+        if _build_has(build["id"], want, name):
             return int(build["id"])
     return 0
 
 
-def release_published(package, prefix):
-    bid = _find_published(package, prefix)
-    print(f"{package}: release {prefix} "
+def release_published(package, evr):
+    want = parse_evr(evr)
+    bid = _find_published(package, want)
+    print(f"{package}: {evr} "
           + (f"published by build {bid}" if bid else "not published"),
           file=sys.stderr)
     print("true" if bid else "false")
     return 0
 
 
-def has_kernel_build(nvr, prefix):
-    want = f"kmod-yeetmouse-{nvr}"
-    bid = _find_published("kmod-yeetmouse", prefix, name=want)
-    print(f"{want}-0-{prefix}: "
+def has_kernel_build(nvr, evr):
+    want = parse_evr(evr)
+    name = f"kmod-yeetmouse-{nvr}"
+    bid = _find_published("kmod-yeetmouse", want, name=name)
+    print(f"{name}-{evr}: "
           + (f"built by {bid}" if bid else f"no succeeded build in {CHROOT}"),
           file=sys.stderr)
     print("true" if bid else "false")
@@ -294,21 +327,33 @@ def _wait(builds):
     return states
 
 
-def _serial(release):
-    head = release.split(".", 1)[0]
-    return int(head) if head.isdigit() else -1
+def _is_newer(p, want):
+    """True if binary record P is at a version-release rpm sorts above WANT:
+    a later snapshot date, or the same Version with a higher Release. Records
+    in any other format, or with another dist tag, are ignored."""
+    if not _is_binary(p):
+        return False
+    m = VERSION_RE.fullmatch(p.get("version", ""))
+    rel = p.get("release", "")
+    suffix = f".{_dist()}"
+    if not m or not rel.endswith(suffix):
+        return False
+    head = rel[:-len(suffix)]
+    if not head.isdigit():
+        return False
+    if m.group(1) > want["snapdate"]:
+        return True
+    return p["version"] == want["version"] and int(head) > want["rel"]
 
 
-def _newer_release_from(build_ids, prefix):
-    """A release with a HIGHER serial than PREFIX published by one of these
-    succeeded builds, or None. That happens when main moved on between our
-    read and COPR's checkout; the newer main's own run covers its release."""
-    want = _serial(prefix)
+def _newer_release_from(build_ids, want):
+    """A version-release HIGHER than WANT published by one of these succeeded
+    builds, or None. That happens when main moved on between our read and
+    COPR's checkout; the newer main's own run covers it."""
     for bid in build_ids:
         for p in _built(bid):
-            rel = p.get("release", "")
-            if p.get("version") == "0" and _serial(rel) > want:
-                return rel
+            if _is_newer(p, want):
+                return f"{p['version']}-{p['release']}"
     return None
 
 
@@ -316,7 +361,7 @@ def _settle(wanted, todo, builds, states, errors):
     """After a wait, drop every package in TODO that is now published (by any
     build, ours or not) or superseded by a newer release; return the rest."""
     left = {}
-    for pkg, prefix in todo.items():
+    for pkg, want in todo.items():
         mine = [b for b, p in builds.items() if p == pkg]
         stuck = [b for b in mine if states.get(b) not in TERMINAL_STATES]
         if stuck:
@@ -324,22 +369,22 @@ def _settle(wanted, todo, builds, states, errors):
                 f"build {b} still {states.get(b)} after {FINISH_TIMEOUT}s: "
                 f"{COPR_URL}/coprs/build/{b}/" for b in stuck)
             continue
-        bid = _find_published(pkg, prefix)
+        bid = _find_published(pkg, want)
         if bid:
-            print(f"{pkg}: 0-{prefix} published by build {bid}")
+            print(f"{pkg}: {want['evr']} published by build {bid}")
             continue
         ok = [b for b in mine if states.get(b) == "succeeded"]
-        newer = _newer_release_from(ok, prefix)
+        newer = _newer_release_from(ok, want)
         if newer:
-            print(f"{pkg}: main moved on; build published newer 0-{newer} "
-                  f"instead of 0-{prefix}")
+            print(f"{pkg}: main moved on; build published newer {newer} "
+                  f"instead of {want['evr']}")
             continue
-        left[pkg] = (prefix, [b for b in mine if states.get(b) != "succeeded"])
+        left[pkg] = (want, [b for b in mine if states.get(b) != "succeeded"])
     return left
 
 
 def ensure_built(wanted):
-    """wanted: {package: release_prefix}.
+    """wanted: {package: parsed version-release from parse_evr}.
 
     1. Skip packages already published at their release.
     2. Wait for every build of the rest that is already queued or running
@@ -349,12 +394,12 @@ def ensure_built(wanted):
     """
     errors = {}
     todo = {}
-    for pkg, prefix in wanted.items():
-        bid = _find_published(pkg, prefix)
+    for pkg, want in wanted.items():
+        bid = _find_published(pkg, want)
         if bid:
-            print(f"{pkg}: 0-{prefix} already published by build {bid}")
+            print(f"{pkg}: {want['evr']} already published by build {bid}")
         else:
-            todo[pkg] = prefix
+            todo[pkg] = want
 
     builds = {}
     for pkg in todo:
@@ -365,7 +410,7 @@ def ensure_built(wanted):
     if builds:
         states = _wait(builds)
         left = _settle(wanted, todo, builds, states, errors)
-        todo = {pkg: prefix for pkg, (prefix, _) in left.items()}
+        todo = {pkg: want for pkg, (want, _) in left.items()}
 
     builds = {}
     for pkg in todo:
@@ -381,10 +426,10 @@ def ensure_built(wanted):
     states = _wait(builds)
     left = _settle(wanted, {p: todo[p] for p in todo if p not in errors},
                    builds, states, errors)
-    for pkg, (prefix, bad) in left.items():
+    for pkg, (want, bad) in left.items():
         detail = "; ".join(f"build {b} {states.get(b)}: "
                            f"{COPR_URL}/coprs/build/{b}/" for b in bad)
-        errors[pkg] = (f"0-{prefix} not published"
+        errors[pkg] = (f"{want['evr']} not published"
                        + (f" ({detail})" if detail else
                           " although the build succeeded"))
 
@@ -396,10 +441,10 @@ def ensure_built(wanted):
 def _pairs(args):
     out = {}
     for arg in args:
-        pkg, sep, prefix = arg.partition("=")
-        if not sep or not pkg or not prefix:
-            raise SystemExit(f"bad PACKAGE=RELEASE_PREFIX argument: {arg!r}")
-        out[pkg] = prefix
+        pkg, sep, evr = arg.partition("=")
+        if not sep or not pkg or not evr:
+            raise SystemExit(f"bad PACKAGE=VERSION-RELEASE argument: {arg!r}")
+        out[pkg] = parse_evr(evr)
     return out
 
 

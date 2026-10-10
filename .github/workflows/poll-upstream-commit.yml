@@ -1,9 +1,14 @@
 name: Poll YeetMouse upstream commit
 
-# When upstream YeetMouse has a new commit, bump the pin and every package's
-# serial on main, then build all three through COPR's API. Every run also
-# builds any package whose current release is not yet published, so a build
-# that failed last time is retried here without anything having to change.
+# When upstream YeetMouse has a new commit, set the new snapshot version in
+# all three specs on main (Release back to 1), then build all three through
+# COPR's API. Every run also builds any package whose current version-release
+# is not yet published, so a build that failed last time is retried here
+# without anything having to change.
+#
+# A new commit whose committer date is not later than the current pin's (same
+# day, or an upstream force-push) is refused and fails the run. See BUILDING.md,
+# "Same-day upstream commits".
 
 on:
   schedule:
@@ -46,56 +51,32 @@ jobs:
             exit 1
           fi
           date=$(gh api "repos/${UPSTREAM_REPO}/commits/${sha}" --jq '.commit.committer.date')
-          # The date is informational only (pkgserial decides ordering), but
-          # still validate it so a bad API answer never reaches a spec.
-          commitdate=$(date -u -d "$date" +%Y%m%d)
-          if ! [[ "$commitdate" =~ ^[0-9]{8}$ ]]; then
+          # Fedora snapshot date: the upstream committer date, UTC, YYYYMMDD.
+          # It orders snapshots, so validate it strictly.
+          snapdate=$(date -u -d "$date" +%Y%m%d)
+          if ! [[ "$snapdate" =~ ^[0-9]{8}$ ]]; then
             echo "::error::Could not format upstream commit date: ${date}"
             exit 1
           fi
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
-          echo "commitdate=${commitdate}" >> "$GITHUB_OUTPUT"
+          echo "snapdate=${snapdate}" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Bump pin and serials, commit and push
+      - name: Pin the new snapshot, commit and push
         env:
           NEW_SHA: ${{ steps.upstream.outputs.sha }}
-          COMMITDATE: ${{ steps.upstream.outputs.commitdate }}
+          SNAPDATE: ${{ steps.upstream.outputs.snapdate }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Decide from the live main on every attempt. If a push is rejected,
-          # start again from the new main and re-apply the bump, so the serial
-          # is always one above whatever main has. Re-applying instead of
-          # rebasing avoids conflicts on the serial lines.
-          for attempt in 1 2 3; do
-            git fetch origin main
-            git reset --hard origin/main
-            current=$(grep -oP '^YEETMOUSE_COMMIT=\K[0-9a-f]{40}$' .external_versions)
-            if [ "$current" = "$NEW_SHA" ]; then
-              echo "main already pins ${NEW_SHA}"
-              exit 0
-            fi
-            python3 .github/scripts/spec_version.py bump-pin "$NEW_SHA" "$COMMITDATE"
-            sed -i -E "s/^YEETMOUSE_COMMIT=.*/YEETMOUSE_COMMIT=${NEW_SHA}/" .external_versions
-            grep -qx "YEETMOUSE_COMMIT=${NEW_SHA}" .external_versions
-            git add specs/kmod-yeetmouse.spec specs/yeetmouse.spec specs/yeetmouse-gui.spec .external_versions
-            git commit -m "chore: update yeetmouse commit pin to ${NEW_SHA}"
-            if git push origin HEAD:refs/heads/main; then
-              exit 0
-            fi
-            echo "push rejected (attempt ${attempt}), retrying from the new main"
-            sleep $((attempt * 10))
-          done
-          echo "::error::Could not push the pin bump after 3 attempts"
-          exit 1
+          bash .github/scripts/pin_upstream.sh
 
-      - name: Build every package whose current release is unpublished
+      - name: Build every package whose current version-release is unpublished
         env:
           COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
           COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
         run: |
-          pairs=$(python3 .github/scripts/spec_version.py release-prefixes)
+          pairs=$(python3 .github/scripts/spec_version.py evrs)
           # shellcheck disable=SC2086  # pairs is space-separated on purpose
           python3 .github/scripts/copr_build.py ensure-built $pairs

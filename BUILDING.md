@@ -44,7 +44,20 @@ ls -l ~/rpmbuild/RPMS/x86_64/ ~/rpmbuild/SRPMS/
 
 The upstream commit is pinned by `%global commit` in each spec. To build a different upstream commit, pass `--define "commit <full-sha>" --define "shortcommit <short-sha>"` to `spectool` and `rpmbuild`.
 
-Each spec's `Release` is `%{pkgserial}.%{commitdate}git%{shortcommit}`. `pkgserial` alone decides which build is newer, so any change to a spec or to a file it uses must raise that spec's `%global pkgserial`. `check-and-build.yml` fails a pull request or push to `main` that does not.
+### Versioning
+
+The specs follow Fedora's [snapshot versioning](https://docs.fedoraproject.org/en-US/packaging-guidelines/Versioning/#_snapshots). Upstream has no releases, so the base version is 0:
+
+- `Version: 0^%{snapdate}git%{shortcommit}`, where `%global snapdate` is the upstream committer date of the pinned commit, in UTC, as `YYYYMMDD`. For example `0^20260803git78dcd0d`.
+- `Release: N%{?dist}`, a packaging counter. It goes back to 1 when the pin changes.
+
+A new upstream commit raises the version, because the date sorts first. A packaging-only change to a spec, or to a file it uses, must raise that spec's `Release`. `check-and-build.yml` fails a pull request or push to `main` that changes a package's build inputs without a higher version-release. `.github/scripts/spec_version.py` reads and changes these fields, and `tests/` covers it (`python3 -m unittest discover -s tests`).
+
+### Same-day upstream commits
+
+The snapshot date must go up from one pin to the next. When upstream's newest commit has the same committer date as the current pin, or an older one (after a force-push), the upstream poller refuses it with "non-monotonic snapshot date" and the run fails. Nothing is committed.
+
+To package such a commit, move every spec to the timestamp form `0^<YYYYMMDD>.<HHMMSS>git<shortcommit>`, using the committer time in UTC. rpm sorts it above the plain date form, so no Epoch is needed. Check the order first, for example `rpmdev-vercmp 0^20260803.180604git1234567-1 0^20260803git78dcd0d-1`. The timestamp form also needs matching changes to the patterns in `spec_version.py` and `copr_build.py`.
 
 The kmod binary package is named after the kernel it was built for, for example `kmod-yeetmouse-7.2.9-200.fc44.x86_64`.
 

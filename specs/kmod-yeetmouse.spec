@@ -3,18 +3,19 @@
 
 %global commit %{?commit}%{!?commit:78dcd0d573bedd5dd7b9e29e9162b28c9eb2fd7b}
 %global shortcommit %{?shortcommit}%{!?shortcommit:78dcd0d}
-# Upstream committer date (UTC) of the pinned commit. Informational only.
-%global commitdate 20260803
-# Build order counter. pkgserial alone decides which build is newer, so it
-# only ever goes up: the upstream poller raises it in all three specs when it
-# changes the pin, the kernel poller raises it here for a kernel-only rebuild,
-# and a packaging-only change here must raise it by hand (check-and-build.yml
-# fails the push otherwise). See .github/scripts/spec_version.py.
-%global pkgserial 2
+# Snapshot version, Fedora Versioning guidelines (Snapshots):
+# Version is 0^<upstream committer date, UTC, YYYYMMDD>git<shortcommit>
+# (upstream has no releases, so the base is 0). Release counts packaging
+# changes for one Version and goes back to 1 when the pin changes. The
+# upstream poller sets snapdate and the pin, the kernel poller raises the
+# kmod Release, and a packaging-only change raises Release by hand
+# (check-and-build.yml fails the push otherwise). See
+# .github/scripts/spec_version.py.
+%global snapdate 20260803
 
 Name:           %{kmod_name}-kmod
-Version:        0
-Release:        %{pkgserial}.%{commitdate}git%{shortcommit}%{?dist}
+Version:        0^%{snapdate}git%{shortcommit}
+Release:        1%{?dist}
 Summary:        YeetMouse mouse acceleration kernel module
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -96,6 +97,12 @@ done
 # intentionally empty -- this package exists only to satisfy kmodtool's generated Requires
 
 %changelog
+* Sat Oct 10 2026 abirkel - 0^20260803git78dcd0d-1
+- Switch to Fedora snapshot versioning: Version is
+  0^<snapshot date>git<shortcommit> and Release is a packaging counter
+  that goes back to 1 when the pin changes. This replaces the pkgserial
+  scheme below.
+
 * Sat Oct 10 2026 abirkel - 0-2.20260803git78dcd0d
 - Drop the main package's files list and depmod scriptlets. kmodtool
   generates both for each kernel package, and the main files list made

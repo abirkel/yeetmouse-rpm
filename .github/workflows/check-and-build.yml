@@ -1,15 +1,17 @@
-name: Check serials and build
+name: Check versions and build
 
 # On every push or PR to main, fail when a package's build inputs changed
-# without its %global pkgserial going up. Without the bump the change would be
-# built at a version dnf already has, so it would never be installed.
+# without its version-release going up (a new snapshot, or a higher Release
+# for a packaging-only change). Without that the change would be built at a
+# version dnf already has, so it would never be installed. The unit tests in
+# tests/ run here too.
 #
-# On a push that passes, build every package whose current release is not yet
-# published, through COPR's API. A push that only touches docs or workflows
-# leaves every release unchanged and builds nothing.
+# On a push that passes, build every package whose current version-release is
+# not yet published, through COPR's API. A push that only touches docs or
+# workflows leaves every version unchanged and builds nothing.
 #
 # Pushes made by the poller workflows use GITHUB_TOKEN, which never triggers
-# other workflows, so this does not run for them. The pollers bump serials
+# other workflows, so this does not run for them. The pollers change versions
 # through spec_version.py, which verifies every edit, and build for themselves.
 # A failed run sends GitHub's usual failure email.
 
@@ -54,12 +56,15 @@ jobs:
             # fetchable. Comparing against HEAD~1 would miss unbumped changes
             # in earlier commits of the replacement history, so fail closed
             # and leave the call to a human.
-            echo "::error::Cannot resolve the pre-push commit (${BEFORE:-none}). Check by hand that every package whose inputs changed has a higher pkgserial than what COPR last published, then run 'Poll YeetMouse upstream commit' by hand to build."
+            echo "::error::Cannot resolve the pre-push commit (${BEFORE:-none}). Check by hand that every package whose inputs changed has a higher version-release than what COPR last published, then run 'Poll YeetMouse upstream commit' by hand to build."
             exit 1
           fi
           echo "base=${base}" >> "$GITHUB_OUTPUT"
 
-      - name: Require a pkgserial bump for every changed package
+      - name: Run the unit tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Require a higher version-release for every changed package
         run: python3 .github/scripts/spec_version.py check-bump "${{ steps.base.outputs.base }}"
 
   build:
@@ -79,11 +84,11 @@ jobs:
           # anything already published.
           ref: main
 
-      - name: Build every package whose current release is unpublished
+      - name: Build every package whose current version-release is unpublished
         env:
           COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
           COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
         run: |
-          pairs=$(python3 .github/scripts/spec_version.py release-prefixes)
+          pairs=$(python3 .github/scripts/spec_version.py evrs)
           # shellcheck disable=SC2086  # pairs is space-separated on purpose
           python3 .github/scripts/copr_build.py ensure-built $pairs

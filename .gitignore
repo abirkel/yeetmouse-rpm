@@ -48,3 +48,4 @@ yarn-error.log
 Thumbs.db
 .AppleDouble
 .LSOverride
+__pycache__/

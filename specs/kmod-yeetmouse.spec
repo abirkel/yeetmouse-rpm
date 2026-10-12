@@ -46,7 +46,7 @@ BuildRequires:  make
 # SRPM generation (.copr/Makefile defines _yeetmouse_srpm), local builds that
 # define yeetmouse_skip_pin, and releases with no pin skip the check.
 %global target_kernel_fc44 7.2.9-201.fc44.x86_64
-%global target_kernel_fc45 7.2.9-301.fc45.x86_64
+%global target_kernel_fc45 7.2.9-300.fc45.x86_64
 %{lua:
 if rpm.expand("%{?_yeetmouse_srpm}%{?yeetmouse_skip_pin}") == "" then
   local fedora = rpm.expand("%{?fedora}")

@@ -97,11 +97,22 @@ Keep the Rawhide chroot's packages correct: a chroot copied at branching keeps w
 
 ### Kernel pins
 
-`kmod-yeetmouse.spec` carries one pin per Fedora release, for example `%global target_kernel_fc45 7.2.9-301.fc45.x86_64`. The binary build fails before producing any package when the chroot's `kernel-devel` is not exactly the pin for its release. That happens when COPR's buildroot lags Fedora's mirrors. Because nothing was published, the same version-release is retried on the next poll, and no Release bump is needed. SRPM generation skips the check (`.copr/Makefile` defines `_yeetmouse_srpm`), and so does a local build on a release with no pin.
+`kmod-yeetmouse.spec` carries one pin per Fedora release, for example `%global target_kernel_fc45 7.2.9-300.fc45.x86_64`. The binary build fails before producing any package when the chroot's `kernel-devel` is not exactly the pin for its release. That happens when COPR's buildroot lags Fedora's mirrors. Because nothing was published, the same version-release is retried on the next poll, and no Release bump is needed. SRPM generation skips the check (`.copr/Makefile` defines `_yeetmouse_srpm`), and so does a local build on a release with no pin.
 
 The kernel poller (every 3 hours) reads each ready release's newest `kernel-devel` from its own `quay.io/fedora/fedora:NN` container. When a kernel is newer than its pin, or a ready release has no pin yet, it moves the pins, raises the kmod Release in the same commit, and pushes. Pins only move forward, so a container landing on a lagging mirror never moves one back. The upstream poller refreshes the pins in the same commit as a new snapshot. A package still unpublished in a ready chroot fails the run once its first failed build at the current version-release in that chroot is 24 hours old (read from COPR's build history). Earlier failures are warnings and are retried. A kmod already published for a different kernel at the same version-release, or a ready release with no pin, fails at once.
 
 One kmod Release covers every release, so a new kernel in one Fedora release also rebuilds the kmod for the others, at a new version-release. That costs a build but never republishes a version.
+
+Pins follow the `fedora` and `updates` repositories only, which is what COPR builds from. A kernel that is only in `updates-testing` gets no kmod until it reaches `updates`.
+
+If a pinned kernel never reaches COPR (for example Fedora withdraws the update), the run fails after 24 hours and `--only-newer` keeps the pin where it is. To recover by hand, set the pin to the kernel COPR does have and raise the kmod Release in one commit, then let the next run build it:
+
+```bash
+python3 .github/scripts/spec_version.py set-kernels fc45=<NVR COPR has>
+python3 .github/scripts/spec_version.py bump-release kmod-yeetmouse
+```
+
+When Fedora branches (Fedora 46 is next), check that the new `fedora-NN-x86_64` chroot exists in the project with both additional packages, using the `curl` command above. Then run the kernel poller by hand. It adds the new release's pin, raises the kmod Release, and builds every package there. If the chroot lacks its packages, `check-chroots` fails the run until the `copr-cli edit-chroot` command above is run.
 
 `kmod-yeetmouse.spec` has no `%files`, `%post` or `%postun` for its main package, because kmodtool generates them for each `kmod-yeetmouse-<kernel>` package. When the Fedora target or the kmodtool version changes, check a real COPR build's package list, file ownership and scriptlets (`rpm -qp --list --scripts`) to confirm that each per-kernel package still owns its module and runs `depmod`, and that no binary package other than `kmod-yeetmouse-<kernel>` and `yeetmouse-kmod-common` is built. The source package is named `yeetmouse-kmod`, so that name is expected only as the `.src.rpm`.
 

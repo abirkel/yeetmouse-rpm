@@ -99,6 +99,10 @@ sudo dnf install "kmod-yeetmouse-$(uname -r)"
 # If not available yet, check back after the next scheduled rebuild (the kernel poller runs every 3 hours)
 ```
 
+Kmods are built only for kernels in Fedora's `fedora` and `updates` repositories. If your kernel came
+from `updates-testing` (enabled by default on a Fedora release before its final release), boot the
+newest kernel from `updates` instead, or wait until your kernel reaches `updates`.
+
 ## GUI Display Issues
 
 **Problem**: GUI window doesn't appear or displays incorrectly.

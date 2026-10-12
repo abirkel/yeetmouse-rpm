@@ -575,16 +575,31 @@ def _settle(todo, builds, states, errors, pins):
 RETRYABLE, FATAL = True, False
 
 
+def _evr_key(evr):
+    """Sort key for a version-release string, or None if not this format."""
+    m = EVR_RE.fullmatch(evr or "")
+    return (m.group(1), int(m.group(3))) if m else None
+
+
 def _failing_for_hours(key, want):
     """Hours since the first failed build of WANT for KEY=(package, chroot),
     read from COPR's own build history (the source package's version is the
     version-release), or 0.0 when none failed yet. This is the durable start
-    of the problem across separate workflow runs."""
+    of the problem across separate workflow runs.
+
+    A build whose SRPM step failed has no source package version. It counts
+    when it is newer than every build of a LOWER version-release, since it
+    can only have been a build of WANT or of something newer."""
     pkg, chroot = key
+    mine = _evr_key(want["evr"])
     first = None
-    for build in _builds_in(pkg, chroot):
-        if (build.get("source_package") or {}).get("version") != want["evr"]:
-            continue
+    for build in _builds_in(pkg, chroot):  # newest first
+        version = (build.get("source_package") or {}).get("version")
+        if version and version != want["evr"]:
+            other = _evr_key(version)
+            if other is None or other < mine:
+                break  # everything older predates this version-release
+            continue  # a newer revision's build
         if build.get("state") not in TERMINAL_STATES:
             continue
         if _chroot_state(build, chroot) not in FAILED_STATES:

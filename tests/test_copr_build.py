@@ -295,26 +295,44 @@ class EnsureBuiltTest(unittest.TestCase):
 
 
 class FailingForTest(unittest.TestCase):
+    def setUp(self):
+        self.cb = helpers.load("copr_build", ENV)
+        self.now = self.cb.time.time()
+
+    def b(self, bid, state, hours_ago, evr, chroot=F44):
+        build = {"id": bid, "state": state, "chroots": [chroot],
+                 "submitted_on": self.now - hours_ago * 3600}
+        if evr:
+            build["source_package"] = {"version": evr}
+        return build
+
+    def age(self, builds, evr):
+        Fake(self.cb, {"yeetmouse": builds}, {})  # newest first, like COPR
+        return self.cb._failing_for_hours(("yeetmouse", F44), self.cb.parse_evr(evr))
+
     def test_first_failure_of_this_evr_in_this_chroot(self):
-        cb = helpers.load("copr_build", ENV)
-        now = cb.time.time()
-        h = 3600
-        sp = lambda evr: {"version": evr}  # noqa: E731
-        Fake(cb, {"yeetmouse": [
-            {"id": 5, "state": "failed", "chroots": [F44], "submitted_on": now - 2 * h,
-             "source_package": sp(f"{V}-2")},
-            {"id": 4, "state": "failed", "chroots": [F44], "submitted_on": now - 30 * h,
-             "source_package": sp(f"{V}-1")},  # older EVR: ignored
-            {"id": 3, "state": "failed", "chroots": [F45], "submitted_on": now - 40 * h,
-             "source_package": sp(f"{V}-2")},  # other chroot: ignored
-            {"id": 2, "state": "succeeded", "chroots": [F44], "submitted_on": now - 50 * h,
-             "source_package": sp(f"{V}-2")},  # not a failure: ignored
-            {"id": 1, "state": "failed", "chroots": [F44], "submitted_on": now - 5 * h,
-             "source_package": sp(f"{V}-2")},
-        ]}, {})
-        age = cb._failing_for_hours(("yeetmouse", F44), cb.parse_evr(f"{V}-2"))
-        self.assertAlmostEqual(age, 5, delta=0.1)
-        self.assertEqual(cb._failing_for_hours(("yeetmouse", F44), cb.parse_evr(f"{V}-3")), 0.0)
+        builds = [
+            self.b(9, "failed", 1, f"{V}-3"),          # newer revision: skipped
+            self.b(8, "failed", 2, f"{V}-2"),
+            self.b(7, "failed", 3, f"{V}-2", F45),     # other chroot: not listed
+            self.b(6, "succeeded", 4, f"{V}-2"),       # not a failure
+            self.b(5, "failed", 5, f"{V}-2"),          # the first failure
+            self.b(4, "failed", 30, f"{V}-1"),         # older EVR: stop here
+            self.b(3, "failed", 40, f"{V}-2"),         # beyond the boundary
+        ]
+        builds = [x for x in builds if x["chroots"] == [F44]]
+        self.assertAlmostEqual(self.age(builds, f"{V}-2"), 5, delta=0.1)
+
+    def test_no_failure_yet(self):
+        self.assertEqual(self.age([self.b(4, "failed", 30, f"{V}-1")], f"{V}-2"), 0.0)
+
+    def test_failed_srpm_step_without_version_counts(self):
+        builds = [self.b(6, "failed", 48, None), self.b(5, "succeeded", 60, f"{V}-1")]
+        self.assertAlmostEqual(self.age(builds, f"{V}-2"), 48, delta=0.1)
+
+    def test_versionless_failure_older_than_a_lower_evr_does_not_count(self):
+        builds = [self.b(6, "succeeded", 10, f"{V}-1"), self.b(5, "failed", 48, None)]
+        self.assertEqual(self.age(builds, f"{V}-2"), 0.0)
 
 
 class KmodPublishedTest(unittest.TestCase):

@@ -330,6 +330,46 @@ class FailingForTest(unittest.TestCase):
         builds = [self.b(6, "failed", 48, None), self.b(5, "succeeded", 60, f"{V}-1")]
         self.assertAlmostEqual(self.age(builds, f"{V}-2"), 48, delta=0.1)
 
+    def test_evr_order_matches_rpm_including_the_commit(self):
+        cmp = self.cb._evr_cmp
+        # Verified with rpmdev-vercmp: "gitc3d12f3" sorts above "git78dcd0d"
+        # (alpha segment "gitc" > "git"), and "git1abcdef" below it (1 < 78).
+        self.assertEqual(cmp("0^20260803gitc3d12f3-1", "0^20260803git78dcd0d-1"), 1)
+        self.assertEqual(cmp("0^20260803git78dcd0d-1", "0^20260803gitc3d12f3-9"), -1)
+        self.assertEqual(cmp("0^20260803git1abcdef-9", "0^20260803git78dcd0d-1"), -1)
+        self.assertEqual(cmp("0^20260804gitaaaaaaa-1", "0^20260803git78dcd0d-9"), 1)
+        self.assertEqual(cmp(f"{V}-10", f"{V}-9"), 1)
+        self.assertEqual(cmp(f"{V}-2", f"{V}-2"), 0)
+        self.assertIsNone(cmp("0-2.20260803git78dcd0d", f"{V}-2"))
+
+    def test_evr_order_cross_checked_with_rpm(self):
+        try:
+            import rpm
+        except ImportError:
+            self.skipTest("rpm Python bindings not installed")
+        evrs = ["0^20260803git78dcd0d-1", "0^20260803gitc3d12f3-1", "0^20260803git78dcd0d-10",
+                "0^20260803git1abcdef-3",
+                "0^20260804git0000000-1", "0^20260803git78dcd0d-2"]
+        for a in evrs:
+            for b in evrs:
+                with self.subTest((a, b)):
+                    va, ra = a.rsplit("-", 1)
+                    vb, rb = b.rsplit("-", 1)
+                    self.assertEqual(self.cb._evr_cmp(a, b),
+                                     rpm.labelCompare(("0", va, ra), ("0", vb, rb)))
+
+    def test_same_day_lower_commit_is_a_boundary(self):
+        builds = [self.b(6, "failed", 3, f"{V}-2"),
+                  self.b(5, "failed", 20, "0^20260803git1abcdef-5"),   # rpm: lower
+                  self.b(4, "failed", 40, f"{V}-2")]
+        self.assertAlmostEqual(self.age(builds, f"{V}-2"), 3, delta=0.1)
+
+    def test_unparseable_version_is_a_conservative_boundary(self):
+        builds = [self.b(6, "failed", 3, f"{V}-2"),
+                  self.b(5, "succeeded", 20, "0-2.20260803git78dcd0d"),
+                  self.b(4, "failed", 40, f"{V}-2")]
+        self.assertAlmostEqual(self.age(builds, f"{V}-2"), 3, delta=0.1)
+
     def test_versionless_failure_older_than_a_lower_evr_does_not_count(self):
         builds = [self.b(6, "succeeded", 10, f"{V}-1"), self.b(5, "failed", 48, None)]
         self.assertEqual(self.age(builds, f"{V}-2"), 0.0)

@@ -575,10 +575,14 @@ def _settle(todo, builds, states, errors, pins):
 RETRYABLE, FATAL = True, False
 
 
-def _evr_key(evr):
-    """Sort key for a version-release string, or None if not this format."""
-    m = EVR_RE.fullmatch(evr or "")
-    return (m.group(1), int(m.group(3))) if m else None
+def _evr_cmp(a, b):
+    """rpm's order for two version-release strings of this format (-1, 0, 1),
+    or None if either is not in it. The whole Version is compared the way
+    rpm does, including the git<sha> part, then Release."""
+    if not (EVR_RE.fullmatch(a or "") and EVR_RE.fullmatch(b or "")):
+        return None
+    (va, ra), (vb, rb) = a.rsplit("-", 1), b.rsplit("-", 1)
+    return spec_version.rpmvercmp(va, vb) or spec_version.rpmvercmp(ra, rb)
 
 
 def _failing_for_hours(key, want):
@@ -589,15 +593,16 @@ def _failing_for_hours(key, want):
 
     A build whose SRPM step failed has no source package version. It counts
     when it is newer than every build of a LOWER version-release, since it
-    can only have been a build of WANT or of something newer."""
+    can only have been a build of WANT or of something newer. A version in
+    any other format (the pre-snapshot pkgserial scheme) is treated as lower
+    too, which is conservative: it can only shorten the grace."""
     pkg, chroot = key
-    mine = _evr_key(want["evr"])
     first = None
     for build in _builds_in(pkg, chroot):  # newest first
         version = (build.get("source_package") or {}).get("version")
         if version and version != want["evr"]:
-            other = _evr_key(version)
-            if other is None or other < mine:
+            order = _evr_cmp(version, want["evr"])
+            if order is None or order < 0:
                 break  # everything older predates this version-release
             continue  # a newer revision's build
         if build.get("state") not in TERMINAL_STATES:

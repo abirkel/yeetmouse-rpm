@@ -111,8 +111,8 @@ For additional help, see the [upstream YeetMouse issues](https://github.com/Andy
 
 This repository builds and publishes RPM packages via [COPR](https://copr.fedorainfracloud.org/coprs/abirkel/yeetmouse/), using `kmodtool` to generate per-kernel-version subpackages. GitHub Actions workflows start every build through COPR's API:
 
-- `poll-upstream-commit.yml` (every 12 hours) moves the commit pin to the latest upstream YeetMouse commit and builds all three packages.
-- `poll-kernel-bump.yml` (every 12 hours) builds `kmod-yeetmouse` for a new Fedora kernel.
+- `poll-upstream-commit.yml` (every 12 hours) moves the commit pin to the latest upstream YeetMouse commit, refreshes the kernel pins, and builds all three packages in every ready Fedora chroot.
+- `poll-kernel-bump.yml` (every 3 hours) pins each Fedora release's newest kernel, builds `kmod-yeetmouse` for it, and fills a newly branched Fedora release. New Fedora releases are picked up automatically (see BUILDING.md, "Fedora releases").
 - `check-and-build.yml` (every push to `main`) checks that each changed package's version-release went up, then builds whatever is not yet published. Pull requests targeting `main` get the check only.
 
 The packages use Fedora's snapshot versioning: `Version` is `0^<upstream commit date>git<short commit>`, for example `0^20260803git78dcd0d`, and `Release` is a packaging counter that goes back to 1 for each new upstream commit. A packaging-only change to a spec, or to a file it uses, must raise that spec's `Release`. Otherwise `check-and-build.yml` fails the pull request or the push to `main`. See [BUILDING.md](BUILDING.md#versioning).

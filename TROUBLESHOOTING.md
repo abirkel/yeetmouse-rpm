@@ -96,7 +96,7 @@ dnf list --available "kmod-yeetmouse-$(uname -r)"
 # If available, install it (each kernel has its own kmod package)
 sudo dnf install "kmod-yeetmouse-$(uname -r)"
 
-# If not available yet, check back after the next scheduled rebuild (every 12 hours)
+# If not available yet, check back after the next scheduled rebuild (the kernel poller runs every 3 hours)
 ```
 
 ## GUI Display Issues

@@ -34,6 +34,11 @@
 #
 # Set each SCM package's build method to `make_srpm` for this to take effect
 # (copr-cli add-package-scm / edit-package-scm --method make_srpm).
+#
+# _yeetmouse_srpm tells kmod-yeetmouse.spec that this is SRPM generation, so
+# it skips the kernel-pin check: this chroot's release and kernel need not
+# match the build target. The define is not stored in the SRPM, so the binary
+# build in the target chroot always runs the check.
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 SRCDIR := $(abspath $(MAKEFILE_DIR)/..)
@@ -44,4 +49,4 @@ srpm:
 	case "$(spec)" in \
 	  *kmod-yeetmouse.spec) dnf -y install kmodtool kernel-devel ;; \
 	esac
-	rpmbuild -bs --define "_srcrpmdir $(outdir)" --define "_sourcedir $(SRCDIR)" "$(spec)"
+	rpmbuild -bs --define "_yeetmouse_srpm 1" --define "_srcrpmdir $(outdir)" --define "_sourcedir $(SRCDIR)" "$(spec)"

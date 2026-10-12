@@ -47,6 +47,26 @@ Subcommands:
       BASE_REF is exempt (a new package). A BASE_REF spec in the one previous
       format (Version 0, pkgserial Release) counts as lower than any snapshot
       version, which is what rpm does too.
+
+  kernel-pins
+      Print the kmod spec's kernel pins as "fcNN=<kernel NVR>",
+      space-separated, sorted by release.
+
+  set-kernels [--only-newer] fcNN=NVR [fcNN=NVR ...]
+      Set (or add) those kernel pins in the kmod spec, leaving other pins
+      alone. With --only-newer, a pin only ever moves to a kernel rpm sorts
+      higher (a lagging mirror must not move it back). Release is NOT
+      changed: the caller raises it in the same commit (bump-release
+      kmod-yeetmouse), because a pin change is a spec change.
+      Prints "unchanged" when no pin changed.
+
+Kernel pins look like this, one line per Fedora release, in the kmod spec:
+
+  %global target_kernel_fc44 7.2.9-201.fc44.x86_64
+
+The spec fails a binary build when the chroot's kernel-devel is not exactly
+the pin for its release, so a lagging COPR buildroot produces no package and
+the same version-release can be retried.
 """
 
 import datetime
@@ -287,6 +307,126 @@ def bump_release(pkg):
     return 0
 
 
+KMOD_SPEC = SPECS["kmod-yeetmouse"]
+
+# A kernel NVR as dnf prints it for kernel-devel, for one Fedora release.
+KERNEL_NVR = r"[0-9]+\.[0-9]+\.[0-9]+-[0-9a-z.]+\.fc{n}\.x86_64"
+PIN_LINE = re.compile(r"^%global target_kernel_fc([0-9]+) (\S+)$", re.M)
+PIN_LOOSE = re.compile(r"^\s*%global\s+target_kernel_", re.M)
+
+
+def valid_kernel(n, nvr):
+    return re.fullmatch(KERNEL_NVR.format(n=n), nvr) is not None
+
+
+def kernel_pins(text, where):
+    """{fedora release (int): kernel NVR} from the kmod spec. At least one
+    pin must exist, each well-formed and for its own release, none repeated."""
+    strict = PIN_LINE.findall(text)
+    loose = PIN_LOOSE.findall(text)
+    if not strict or len(strict) != len(loose):
+        raise SystemExit(f"{where}: expected one or more well-formed "
+                         f"'%global target_kernel_fcNN <NVR>' lines, found "
+                         f"{len(strict)} well-formed and {len(loose)} total")
+    pins = {}
+    for n, nvr in strict:
+        n = int(n)
+        if n in pins:
+            raise SystemExit(f"{where}: kernel pin for fc{n} appears twice")
+        if not valid_kernel(n, nvr):
+            raise SystemExit(f"{where}: kernel pin {nvr!r} is not an "
+                             f"x86_64 kernel NVR for fc{n}")
+        pins[n] = nvr
+    return pins
+
+
+def parse_pin_args(args):
+    out = {}
+    for arg in args:
+        m = re.fullmatch(r"fc([0-9]+)=(\S+)", arg)
+        if not m or not valid_kernel(int(m.group(1)), m.group(2)):
+            raise SystemExit(f"bad fcNN=<kernel NVR> argument: {arg!r}")
+        n = int(m.group(1))
+        if n in out:
+            raise SystemExit(f"fc{n} given twice")
+        out[n] = m.group(2)
+    return out
+
+
+def rpmvercmp(a, b):
+    """rpm's version-segment comparison (rpmvercmp), for the version or the
+    release of a kernel NVR. Returns -1, 0 or 1. Tilde and caret do not occur
+    in kernel NVRs, so they are not handled."""
+    seg = re.compile(r"[0-9]+|[a-zA-Z]+")
+    xa, xb = seg.findall(a), seg.findall(b)
+    for sa, sb in zip(xa, xb):
+        if sa.isdigit() != sb.isdigit():
+            return 1 if sa.isdigit() else -1  # numeric segments sort higher
+        if sa.isdigit():
+            sa, sb = sa.lstrip("0") or "0", sb.lstrip("0") or "0"
+            if len(sa) != len(sb):
+                return 1 if len(sa) > len(sb) else -1
+        if sa != sb:
+            return 1 if sa > sb else -1
+    return (len(xa) > len(xb)) - (len(xa) < len(xb))
+
+
+def kernel_newer(new, old):
+    """True if kernel NVR NEW sorts strictly above OLD (same release)."""
+    nv, nr = new.split("-", 1)
+    ov, orr = old.split("-", 1)
+    c = rpmvercmp(nv, ov)
+    return c > 0 or (c == 0 and rpmvercmp(nr, orr) > 0)
+
+
+def set_kernels(args):
+    only_newer = bool(args) and args[0] == "--only-newer"
+    if only_newer:
+        args = args[1:]
+    want = parse_pin_args(args)
+    text = read(KMOD_SPEC)
+    old = kernel_pins(text, KMOD_SPEC)
+    before = parse_or_exit(text, KMOD_SPEC)
+    if only_newer:
+        # A container can land on a mirror that is behind the one the last
+        # run used. Never move a pin backwards, or two mirrors would make
+        # the pin (and the kmod Release) flip back and forth.
+        for n in [n for n in want if n in old and not kernel_newer(want[n], old[n])]:
+            if want[n] != old[n]:
+                print(f"fc{n}: keeping {old[n]}, {want[n]} is not newer")
+            del want[n]
+    changed = {n: nvr for n, nvr in want.items() if old.get(n) != nvr}
+    if not changed:
+        print("unchanged")
+        return 0
+    for n, nvr in changed.items():
+        line = f"%global target_kernel_fc{n} {nvr}"
+        if n in old:
+            text = re.sub(rf"^%global target_kernel_fc{n} \S+$",
+                          lambda _m, line=line: line, text, flags=re.M)
+        else:
+            # Insert after the last existing pin, keeping releases sorted.
+            last = list(PIN_LINE.finditer(text))[-1]
+            text = text[:last.end()] + "\n" + line + text[last.end():]
+    lines = sorted((m.group(0) for m in PIN_LINE.finditer(text)),
+                   key=lambda s: int(PIN_LINE.fullmatch(s).group(1)))
+    first = next(PIN_LINE.finditer(text)).start()
+    last = list(PIN_LINE.finditer(text))[-1].end()
+    text = text[:first] + "\n".join(lines) + text[last:]
+    write(KMOD_SPEC, text)
+
+    # Postflight: the spec still parses, only the pins changed.
+    new_text = read(KMOD_SPEC)
+    after = parse_or_exit(new_text, KMOD_SPEC)
+    new = kernel_pins(new_text, KMOD_SPEC)
+    if after != before or new != {**old, **want}:
+        raise SystemExit(f"{KMOD_SPEC}: kernel pin update did not apply as "
+                         f"expected: {new}")
+    for n in sorted(changed):
+        print(f"fc{n}: {old.get(n, '(none)')} -> {changed[n]}")
+    return 0
+
+
 def _git(*args):
     return subprocess.run(["git", *args], check=True, capture_output=True,
                           text=True).stdout
@@ -369,6 +509,12 @@ def check_bump(base):
 
 
 def main(argv):
+    if len(argv) == 2 and argv[1] == "kernel-pins":
+        print(" ".join(f"fc{n}={nvr}" for n, nvr in
+                       sorted(kernel_pins(read(KMOD_SPEC), KMOD_SPEC).items())))
+        return 0
+    if len(argv) >= 3 and argv[1] == "set-kernels":
+        return set_kernels(argv[2:])
     if len(argv) == 3 and argv[1] == "evr":
         return evr(argv[2])
     if len(argv) == 2 and argv[1] == "evrs":

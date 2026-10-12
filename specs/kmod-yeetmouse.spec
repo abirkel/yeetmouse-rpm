@@ -15,7 +15,7 @@
 
 Name:           %{kmod_name}-kmod
 Version:        0^%{snapdate}git%{shortcommit}
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        YeetMouse mouse acceleration kernel module
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -38,6 +38,31 @@ BuildRequires:  make
 %if "%{kmodtool_for_kernels}" == ""
 %{error:kernel-devel must be installed before kmodtool is evaluated}
 %endif
+# Kernel pins, one per Fedora release, written by the pollers through
+# spec_version.py set-kernels. A binary build fails here, before any package
+# exists, when the chroot's kernel-devel is not exactly the pinned kernel for
+# its release (for example COPR's buildroot lagging Fedora's mirrors). Since
+# nothing was published, the same version-release can simply be retried.
+# SRPM generation (.copr/Makefile defines _yeetmouse_srpm), local builds that
+# define yeetmouse_skip_pin, and releases with no pin skip the check.
+%global target_kernel_fc44 7.2.9-201.fc44.x86_64
+%global target_kernel_fc45 7.2.9-301.fc45.x86_64
+%{lua:
+if rpm.expand("%{?_yeetmouse_srpm}%{?yeetmouse_skip_pin}") == "" then
+  local fedora = rpm.expand("%{?fedora}")
+  local want = ""
+  if fedora ~= "" then
+    want = rpm.expand("%{?target_kernel_fc" .. fedora .. "}")
+  end
+  if want ~= "" then
+    local have = rpm.expand("%{kmodtool_for_kernels}"):match("^%s*(.-)%s*$")
+    if have ~= want then
+      error("kernel-devel '" .. have .. "' is not the pinned kernel '" ..
+            want .. "' for fc" .. fedora, 0)
+    end
+  end
+end
+}
 %{expand:%(kmodtool --target %{_target_cpu} --kmodname %{kmod_name} --for-kernels "%{kmodtool_for_kernels}" 2>&1)}
 
 # CONFIRMED REQUIRED by real multi-kernel install testing (design doc 4, item 2b): kmodtool's
@@ -97,6 +122,11 @@ done
 # intentionally empty -- this package exists only to satisfy kmodtool's generated Requires
 
 %changelog
+* Mon Oct 12 2026 abirkel - 0^20260803git78dcd0d-2
+- Pin the expected kernel for each Fedora release and fail the build
+  before any package is produced when the chroot's kernel-devel differs.
+  Build for Fedora 44 and Fedora 45.
+
 * Sat Oct 10 2026 abirkel - 0^20260803git78dcd0d-1
 - Switch to Fedora snapshot versioning: Version is
   0^<snapshot date>git<shortcommit> and Release is a packaging counter

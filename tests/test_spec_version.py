@@ -59,15 +59,15 @@ class ParseTest(InRepo):
         for pkg in sv.SPECS:
             f = sv.parse(self.spec(pkg), pkg)
             self.assertEqual(f["version"], "0^20260803git78dcd0d")
-            self.assertEqual(f["release"], 1)
+            self.assertEqual(f["release"], 2)
 
     def test_evrs(self):
         rc, out = self.run_cmd("evrs")
         self.assertEqual(rc, 0)
         self.assertEqual(out.split(), [
-            "kmod-yeetmouse=0^20260803git78dcd0d-1",
-            "yeetmouse=0^20260803git78dcd0d-1",
-            "yeetmouse-gui=0^20260803git78dcd0d-1"])
+            "kmod-yeetmouse=0^20260803git78dcd0d-2",
+            "yeetmouse=0^20260803git78dcd0d-2",
+            "yeetmouse-gui=0^20260803git78dcd0d-2"])
 
     def test_rejects_malformed(self):
         base = self.spec("yeetmouse")
@@ -76,9 +76,9 @@ class ParseTest(InRepo):
                 "%global snapdate 20260803", "%global snapdate 20260803\n%global snapdate 20260804"),
             "9-digit snapdate": base.replace("snapdate 20260803", "snapdate 202608031"),
             "invalid date": base.replace("snapdate 20260803", "snapdate 20261332"),
-            "release macro": base.replace("Release:        1%{?dist}",
+            "release macro": base.replace("Release:        2%{?dist}",
                                           "Release:        %{rel}%{?dist}"),
-            "release zero": base.replace("Release:        1%{?dist}", "Release:        0%{?dist}"),
+            "release zero": base.replace("Release:        2%{?dist}", "Release:        0%{?dist}"),
             "version literal": base.replace("Version:        0^%{snapdate}git%{shortcommit}",
                                             "Version:        0^20260803git78dcd0d"),
             "short not prefix": base.replace("!?shortcommit:78dcd0d", "!?shortcommit:1234567"),
@@ -100,7 +100,7 @@ class ParseTest(InRepo):
 class BumpPinTest(InRepo):
     def test_newer_date_sets_pin_and_resets_release(self):
         self.set_spec("kmod-yeetmouse", self.spec("kmod-yeetmouse").replace(
-            "Release:        1%{?dist}", "Release:        4%{?dist}"))
+            "Release:        2%{?dist}", "Release:        4%{?dist}"))
         rc, _ = self.run_cmd("bump-pin", NEW_SHA, "20261009")
         self.assertEqual(rc, 0)
         for pkg in sv.SPECS:
@@ -151,7 +151,7 @@ class BumpReleaseTest(InRepo):
         self.assertEqual(after["release"], before["release"] + 1)
         self.assertEqual({k: v for k, v in after.items() if k != "release"},
                          {k: v for k, v in before.items() if k != "release"})
-        self.assertEqual(sv.parse(self.spec("yeetmouse"), "y")["release"], 1)
+        self.assertEqual(sv.parse(self.spec("yeetmouse"), "y")["release"], 2)
 
 
 class CheckBumpTest(InRepo):
@@ -198,7 +198,7 @@ class CheckBumpTest(InRepo):
     def test_older_date_fails_even_with_higher_release(self):
         b = self.base()
         t = self.spec("yeetmouse").replace("snapdate 20260803", "snapdate 20260801").replace(
-            "Release:        1%{?dist}", "Release:        9%{?dist}")
+            "Release:        2%{?dist}", "Release:        9%{?dist}")
         self.set_spec("yeetmouse", t)
         rc, out = self.run_cmd("check-bump", b)
         self.assertEqual(rc, 1)

@@ -28,7 +28,6 @@ env:
   COPR_OWNER: abirkel
   COPR_PROJECT: yeetmouse
   COPR_URL: https://copr.fedorainfracloud.org
-  COPR_CHROOT: fedora-44-x86_64
 
 jobs:
   check:
@@ -83,12 +82,27 @@ jobs:
           # the newer main's own run builds it too, and ensure-built skips
           # anything already published.
           ref: main
+          # Full history: ensure-built reads when each spec last changed.
+          fetch-depth: 0
 
-      - name: Build every package whose current version-release is unpublished
+      - name: Find the ready COPR chroots
+        id: chroots
+        run: |
+          ready=$(python3 .github/scripts/copr_build.py ready-chroots)
+          echo "Ready chroots: ${ready:-none}"
+          echo "ready=${ready}" >> "$GITHUB_OUTPUT"
+
+      - name: Build every package that is unpublished in a ready chroot
+        if: steps.chroots.outputs.ready != ''
         env:
+          READY: ${{ steps.chroots.outputs.ready }}
           COPR_LOGIN: ${{ secrets.COPR_LOGIN }}
           COPR_TOKEN: ${{ secrets.COPR_TOKEN }}
         run: |
           pairs=$(python3 .github/scripts/spec_version.py evrs)
           # shellcheck disable=SC2086  # pairs is space-separated on purpose
-          python3 .github/scripts/copr_build.py ensure-built $pairs
+          python3 .github/scripts/copr_build.py ensure-built --grace-hours 24 "$READY" $pairs
+
+      - name: Fail if a COPR chroot is not ready
+        if: always()
+        run: python3 .github/scripts/copr_build.py check-chroots

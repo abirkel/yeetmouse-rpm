@@ -53,6 +53,8 @@ its own, `dnf` could pick a kmod built for a different kernel. `yeetmouse` does 
 the kmod at all. Leave out `yeetmouse-gui` if you only want the CLI and service.
 
 The kmod is pre-compiled for each Fedora kernel, so installation needs no local compilation.
+Builds follow the kernels in Fedora's `fedora` and `updates` repositories. A kernel installed
+from `updates-testing` has no kmod until it reaches `updates`.
 
 ### Post-Installation
 

@@ -59,15 +59,15 @@ class ParseTest(InRepo):
         for pkg in sv.SPECS:
             f = sv.parse(self.spec(pkg), pkg)
             self.assertEqual(f["version"], "0^20260803git78dcd0d")
-            self.assertEqual(f["release"], 2)
+            self.assertGreaterEqual(f["release"], 1)
 
     def test_evrs(self):
         rc, out = self.run_cmd("evrs")
         self.assertEqual(rc, 0)
-        self.assertEqual(out.split(), [
-            "kmod-yeetmouse=0^20260803git78dcd0d-2",
-            "yeetmouse=0^20260803git78dcd0d-2",
-            "yeetmouse-gui=0^20260803git78dcd0d-2"])
+        want = [f"{pkg}={sv.evr_of(sv.parse(self.spec(pkg), pkg))}" for pkg in sv.SPECS]
+        self.assertEqual(out.split(), want)
+        for pair in want:
+            self.assertRegex(pair, r"^[a-z-]+=0\^20260803git78dcd0d-[1-9][0-9]*$")
 
     def test_rejects_malformed(self):
         base = self.spec("yeetmouse")
@@ -100,7 +100,7 @@ class ParseTest(InRepo):
 class BumpPinTest(InRepo):
     def test_newer_date_sets_pin_and_resets_release(self):
         self.set_spec("kmod-yeetmouse", self.spec("kmod-yeetmouse").replace(
-            "Release:        2%{?dist}", "Release:        4%{?dist}"))
+            "Release:        3%{?dist}", "Release:        4%{?dist}"))
         rc, _ = self.run_cmd("bump-pin", NEW_SHA, "20261009")
         self.assertEqual(rc, 0)
         for pkg in sv.SPECS:

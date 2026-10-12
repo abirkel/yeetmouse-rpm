@@ -15,7 +15,7 @@
 
 Name:           %{kmod_name}-kmod
 Version:        0^%{snapdate}git%{shortcommit}
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        YeetMouse mouse acceleration kernel module
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -122,7 +122,7 @@ done
 # intentionally empty -- this package exists only to satisfy kmodtool's generated Requires
 
 %changelog
-* Mon Oct 12 2026 abirkel - 0^20260803git78dcd0d-2
+* Mon Oct 12 2026 abirkel - 0^20260803git78dcd0d-3
 - Pin the expected kernel for each Fedora release and fail the build
   before any package is produced when the chroot's kernel-devel differs.
   Build for Fedora 44 and Fedora 45.

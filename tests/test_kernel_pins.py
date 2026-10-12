@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,10 @@ import helpers  # noqa: E402
 
 KMOD = "specs/kmod-yeetmouse.spec"
 NEW_SHA = "c3d12f3313a95f25162a1503be624f3b0617f8c0"
+
+
+def kmod_release(d):
+    return int(re.search(r"^Release:\s+([0-9]+)%", helpers.read(d, KMOD), re.M).group(1))
 
 
 def sv(d, *args):
@@ -40,7 +45,7 @@ class KernelPinTest(unittest.TestCase):
             f"%global target_kernel_fc45 {self.pins['fc45']}",
             "%global target_kernel_fc46 7.3.0-100.fc46.x86_64"])
         # Release is the caller's job.
-        self.assertIn("Release:        2%{?dist}", text)
+        self.assertIn(f"Release:        {kmod_release(self.d)}%{{?dist}}", text)
 
     def test_unchanged(self):
         r = sv(self.d, "set-kernels", f"fc44={self.pins['fc44']}")
@@ -102,6 +107,7 @@ class PinScriptsTest(unittest.TestCase):
         helpers.git(self.work, "config", "user.name", "test")
         helpers.git(self.work, "config", "user.email", "test@example.invalid")
         self.pins = sv(self.work, "kernel-pins").stdout.split()
+        self.release = kmod_release(self.work)
 
     def tearDown(self):
         shutil.rmtree(self.src)
@@ -137,7 +143,7 @@ class PinScriptsTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         spec = self.origin_kmod()
         self.assertIn("%global target_kernel_fc44 7.2.10-200.fc44.x86_64", spec)
-        self.assertIn("Release:        3%{?dist}", spec)
+        self.assertIn(f"Release:        {self.release + 1}%{{?dist}}", spec)
         self.assertEqual(helpers.git(self.origin, "rev-list", "--count", "main").strip(), "2")
         # Running again with the same kernels changes nothing.
         helpers.git(self.work, "fetch", "-q", "origin")
@@ -152,7 +158,7 @@ class PinScriptsTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         spec = self.origin_kmod()
         self.assertIn("%global target_kernel_fc46 7.3.0-100.fc46.x86_64", spec)
-        self.assertIn("Release:        3%{?dist}", spec)
+        self.assertIn(f"Release:        {self.release + 1}%{{?dist}}", spec)
 
     def test_upstream_bump_refreshes_pins_in_the_same_commit(self):
         r = self.run_script("pin_upstream.sh", NEW_SHA=NEW_SHA, SNAPDATE="20261009",

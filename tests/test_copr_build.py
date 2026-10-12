@@ -178,7 +178,7 @@ class EnsureBuiltTest(unittest.TestCase):
             (99 if key in self.published else 0), self.conflicts.get(key))
         cb._in_flight = lambda p, c: list(self.in_flight.get((p, c), []))
         cb._built = lambda bid, chroot: self.built.get(bid, [])
-        cb._spec_age_hours = lambda p: self.age
+        cb._failing_for_hours = lambda key, want: self.age
 
         def submit(p, c):
             self.submits.append((p, c))
@@ -241,6 +241,20 @@ class EnsureBuiltTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("::error::yeetmouse", out)
 
+    def test_conflict_within_grace_is_still_an_error(self):
+        self.conflicts[("yeetmouse", F44)] = "published but not as the pinned kernel"
+        self.age = 1.0
+        rc, out = self.run_it(grace=24)
+        self.assertEqual((rc, self.submits), (1, []))
+        self.assertIn("::error::", out)
+
+    def test_wrong_output_within_grace_is_still_an_error(self):
+        self.built = {501: [pkg("yeetmouse", V, "1.fc44", "src")]}
+        self.age = 1.0
+        rc, out = self.run_it(grace=24)
+        self.assertEqual(rc, 1)
+        self.assertIn("::error::", out)
+
     def test_conflict_is_never_resubmitted(self):
         self.conflicts[("yeetmouse", F44)] = "published but not as the pinned kernel"
         rc, out = self.run_it()
@@ -278,6 +292,29 @@ class EnsureBuiltTest(unittest.TestCase):
             with self.subTest(arg):
                 with self.assertRaises(SystemExit):
                     self.cb._chroot_list(arg)
+
+
+class FailingForTest(unittest.TestCase):
+    def test_first_failure_of_this_evr_in_this_chroot(self):
+        cb = helpers.load("copr_build", ENV)
+        now = cb.time.time()
+        h = 3600
+        sp = lambda evr: {"version": evr}  # noqa: E731
+        Fake(cb, {"yeetmouse": [
+            {"id": 5, "state": "failed", "chroots": [F44], "submitted_on": now - 2 * h,
+             "source_package": sp(f"{V}-2")},
+            {"id": 4, "state": "failed", "chroots": [F44], "submitted_on": now - 30 * h,
+             "source_package": sp(f"{V}-1")},  # older EVR: ignored
+            {"id": 3, "state": "failed", "chroots": [F45], "submitted_on": now - 40 * h,
+             "source_package": sp(f"{V}-2")},  # other chroot: ignored
+            {"id": 2, "state": "succeeded", "chroots": [F44], "submitted_on": now - 50 * h,
+             "source_package": sp(f"{V}-2")},  # not a failure: ignored
+            {"id": 1, "state": "failed", "chroots": [F44], "submitted_on": now - 5 * h,
+             "source_package": sp(f"{V}-2")},
+        ]}, {})
+        age = cb._failing_for_hours(("yeetmouse", F44), cb.parse_evr(f"{V}-2"))
+        self.assertAlmostEqual(age, 5, delta=0.1)
+        self.assertEqual(cb._failing_for_hours(("yeetmouse", F44), cb.parse_evr(f"{V}-3")), 0.0)
 
 
 class KmodPublishedTest(unittest.TestCase):

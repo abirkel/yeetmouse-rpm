@@ -14,9 +14,9 @@ name: Poll Fedora kernels for kmod-yeetmouse
 #
 # COPR's buildroot can lag Fedora's mirrors. The kmod spec then fails the
 # build before producing any package, so this run retries the same
-# version-release every 3 hours, with no further bump. A package still
-# unpublished 24 hours after its spec last changed fails the run (and sends
-# the email). So does a chroot that is not ready.
+# version-release every 3 hours, with no further bump. A package whose first
+# failed build at its current version-release in a chroot is 24 hours old
+# fails the run (and sends the email). So does a chroot that is not ready.
 
 on:
   schedule:

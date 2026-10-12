@@ -60,9 +60,12 @@ Subcommands:
       A kmod-yeetmouse version-release that is published in a chroot but NOT
       for the pinned kernel is an error and is never resubmitted:
       resubmitting would republish yeetmouse-kmod-common.
-      A pair that still fails is an error, unless its spec was last changed
-      less than H hours ago (default 0): then it is a warning, because COPR's
-      buildroot may still be catching up with Fedora's mirrors.
+      A pair that still fails is an error, unless its first failed build at
+      this version-release in that chroot (from COPR's build history) is
+      less than H hours old (default 0): then it is a warning, because COPR's
+      buildroot may still be catching up with Fedora's mirrors. A conflict,
+      a missing kernel pin, or a success that published the wrong thing is
+      always an error.
       Exit 0 only if every pair is published or within the grace period.
 
 "true"/"false" answers exit 0. Any API error exits non-zero, so a calling step
@@ -82,7 +85,6 @@ import json
 import os
 import re
 import socket
-import subprocess
 import sys
 import time
 import urllib.error
@@ -549,13 +551,13 @@ def _settle(todo, builds, states, errors, pins):
         mine = [b for b, k in builds.items() if k == key]
         stuck = [b for b in mine if states.get(b) not in TERMINAL_STATES]
         if stuck:
-            errors[key] = "; ".join(
+            errors[key] = ("; ".join(
                 f"build {b} still {states.get(b)} after {FINISH_TIMEOUT}s: "
-                f"{COPR_URL}/coprs/build/{b}/" for b in stuck)
+                f"{COPR_URL}/coprs/build/{b}/" for b in stuck), RETRYABLE)
             continue
         bid, conflict = _published(key, want, pins)
         if conflict:
-            errors[key] = conflict
+            errors[key] = (conflict, FATAL)
             continue
         if bid:
             print(f"{_label(key)}: {want['evr']} published by build {bid}")
@@ -570,15 +572,27 @@ def _settle(todo, builds, states, errors, pins):
     return left
 
 
-def _spec_age_hours(pkg):
-    """Hours since the last commit touching PKG's spec, or None."""
-    try:
-        out = subprocess.run(
-            ["git", "log", "-1", "--format=%ct", "--", spec_version.SPECS[pkg]],
-            check=True, capture_output=True, text=True).stdout.strip()
-        return (time.time() - int(out)) / 3600 if out else None
-    except (subprocess.CalledProcessError, ValueError, OSError):
-        return None
+RETRYABLE, FATAL = True, False
+
+
+def _failing_for_hours(key, want):
+    """Hours since the first failed build of WANT for KEY=(package, chroot),
+    read from COPR's own build history (the source package's version is the
+    version-release), or 0.0 when none failed yet. This is the durable start
+    of the problem across separate workflow runs."""
+    pkg, chroot = key
+    first = None
+    for build in _builds_in(pkg, chroot):
+        if (build.get("source_package") or {}).get("version") != want["evr"]:
+            continue
+        if build.get("state") not in TERMINAL_STATES:
+            continue
+        if _chroot_state(build, chroot) not in FAILED_STATES:
+            continue
+        when = build.get("submitted_on")
+        if isinstance(when, (int, float)) and (first is None or when < first):
+            first = when
+    return 0.0 if first is None else max(0.0, (time.time() - first) / 3600)
 
 
 def ensure_built(chroots, wanted, grace_hours=0.0, pins=None):
@@ -604,10 +618,10 @@ def ensure_built(chroots, wanted, grace_hours=0.0, pins=None):
             try:
                 bid, conflict = _published(key, want, pins)
             except SystemExit as e:
-                errors[key] = str(e)
+                errors[key] = (str(e), FATAL)  # no kernel pin: a config error
                 continue
             if conflict:
-                errors[key] = conflict
+                errors[key] = (conflict, FATAL)
             elif bid:
                 print(f"{_label(key)}: {want['evr']} already published by "
                       f"build {bid}")
@@ -630,7 +644,9 @@ def ensure_built(chroots, wanted, grace_hours=0.0, pins=None):
         try:
             ids, ambiguous = _submit(*key)
         except SystemExit as e:
-            errors[key] = str(e)  # keep going so every pair is reported
+            # Keep going so every pair is reported. A rejected or unresolved
+            # submission is retried by the next run.
+            errors[key] = (str(e), RETRYABLE)
             continue
         for bid in ids:
             print(f"{_label(key)}: {'candidate' if ambiguous else 'submitted'} "
@@ -642,17 +658,20 @@ def ensure_built(chroots, wanted, grace_hours=0.0, pins=None):
     for key, (want, bad) in left.items():
         detail = "; ".join(f"build {b} {states.get(b)}: "
                            f"{COPR_URL}/coprs/build/{b}/" for b in bad)
-        errors[key] = (f"{want['evr']} not published"
-                       + (f" ({detail})" if detail else
-                          " although the build succeeded"))
+        if detail:
+            errors[key] = (f"{want['evr']} not published ({detail})", RETRYABLE)
+        else:
+            # A success that published something else is not COPR lag.
+            errors[key] = (f"{want['evr']} not published although the build "
+                           f"succeeded", FATAL)
 
     failed = 0
-    for key, err in errors.items():
-        age = _spec_age_hours(key[0]) if grace_hours > 0 else None
+    for key, (err, retryable) in errors.items():
+        age = (_failing_for_hours(key, todo.get(key) or wanted[key[0]])
+               if retryable and grace_hours > 0 else None)
         if age is not None and age < grace_hours:
-            print(f"::warning::{_label(key)}: {err}. The spec changed "
-                  f"{age:.1f}h ago (grace {grace_hours:g}h); a later run "
-                  f"retries.")
+            print(f"::warning::{_label(key)}: {err}. First failure {age:.1f}h "
+                  f"ago (grace {grace_hours:g}h); a later run retries.")
         else:
             print(f"::error::{_label(key)}: {err}")
             failed = 1

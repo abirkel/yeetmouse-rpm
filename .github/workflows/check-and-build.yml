@@ -82,8 +82,6 @@ jobs:
           # the newer main's own run builds it too, and ensure-built skips
           # anything already published.
           ref: main
-          # Full history: ensure-built reads when each spec last changed.
-          fetch-depth: 0
 
       - name: Find the ready COPR chroots
         id: chroots

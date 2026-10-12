@@ -5,7 +5,9 @@
 # against a throwaway repository.
 #
 # Environment: NEW_SHA (40 hex), SNAPDATE (YYYYMMDD, upstream committer date
-# in UTC). Run from the repository root with an "origin" remote.
+# in UTC), and optionally KERNEL_PINS ("fcNN=NVR ...", from sense_kernels.sh),
+# which are written to the kmod spec in the same commit. Run from the
+# repository root with an "origin" remote.
 #
 # Exit 0 when main already pins NEW_SHA (nothing is committed) or the bump was
 # pushed. Exit 1 when bump-pin refuses the date or the push keeps failing.
@@ -31,6 +33,12 @@ for attempt in 1 2 3; do
   if git diff --quiet -- "${SPECS[@]}"; then
     echo "specs already pin ${NEW_SHA}, nothing to commit"
     exit 0
+  fi
+  # Refresh the kernel pins in the same commit, so the new snapshot is built
+  # for the current kernel of every release (Release is already 1).
+  if [ -n "${KERNEL_PINS:-}" ]; then
+    # shellcheck disable=SC2086  # KERNEL_PINS is space-separated on purpose
+    python3 .github/scripts/spec_version.py set-kernels --only-newer $KERNEL_PINS
   fi
   sed -i -E "s/^YEETMOUSE_COMMIT=.*/YEETMOUSE_COMMIT=${NEW_SHA}/" .external_versions
   grep -qx "YEETMOUSE_COMMIT=${NEW_SHA}" .external_versions

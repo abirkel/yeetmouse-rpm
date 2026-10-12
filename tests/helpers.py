@@ -46,7 +46,8 @@ def copy_repo():
     with one commit. Caller removes it."""
     d = tempfile.mkdtemp(prefix="yeetmouse-test-")
     for rel in SPEC_FILES + LOCAL_SOURCES + [".github/scripts/spec_version.py",
-                                             ".github/scripts/pin_upstream.sh"]:
+                                             ".github/scripts/pin_upstream.sh",
+                                             ".github/scripts/pin_kernels.sh"]:
         src = os.path.join(ROOT, rel)
         dst = os.path.join(d, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)

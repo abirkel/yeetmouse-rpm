@@ -13,7 +13,7 @@
 
 Name:           yeetmouse-gui
 Version:        0^%{snapdate}git%{shortcommit}
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        GUI application for YeetMouse mouse acceleration configuration
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -70,6 +70,10 @@ install -m 755 gui/YeetMouseGui %{buildroot}%{_bindir}/yeetmouse-gui
 #%%{_datadir}/applications/yeetmouse-gui.desktop
 
 %changelog
+* Mon Oct 12 2026 abirkel - 0^20260803git78dcd0d-2
+- Rebuild for Fedora 44 and Fedora 45 (SRPM generation now defines
+  _yeetmouse_srpm).
+
 * Sat Oct 10 2026 abirkel - 0^20260803git78dcd0d-1
 - Switch to Fedora snapshot versioning: Version is
   0^<snapshot date>git<shortcommit> and Release is a packaging counter

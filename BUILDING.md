@@ -17,10 +17,11 @@ sudo dnf install rpm-build rpmdevtools rpmlint kmodtool kernel-devel \
                  gcc gcc-c++ make git glfw-devel mesa-libGL-devel
 ```
 
-`kmod-yeetmouse.spec` builds against every `kernel-devel` version installed at the time the spec is parsed. To build for your running kernel, install the matching one:
+`kmod-yeetmouse.spec` builds against every `kernel-devel` version installed at the time the spec is parsed. When the spec has a kernel pin for your Fedora release (see [Kernel pins](#kernel-pins)), a build fails unless exactly that one `kernel-devel` is installed. To build for your running kernel instead, install the matching one and skip the pin check:
 
 ```bash
 sudo dnf install "kernel-devel-$(uname -r)"
+# add to the kmod rpmbuild below:  --define "yeetmouse_skip_pin 1"
 ```
 
 ## Build
@@ -79,16 +80,28 @@ Before pushing a spec change, also run `rpmspec --parse <spec>`. It catches macr
 
 ## How COPR builds the packages
 
-Each package is a COPR SCM package using the `make_srpm` method, with webhook rebuilds turned off. The GitHub Actions workflows start every build through COPR's API (see README.md, "Automated Builds"). COPR runs `make -f .copr/Makefile srpm outdir=<dir> spec=<spec>` as root in a `fedora-44-x86_64` mock chroot. For `kmod-yeetmouse.spec` the Makefile installs `kmodtool` and `kernel-devel` first, because the spec needs both at parse time. That covers only the SRPM step. COPR then builds the binary packages in a separate mock chroot and parses the spec again before any `BuildRequires` are installed, so both packages must also be in that chroot's buildroot. The kmod is built against whatever `kernel-devel` that chroot provides.
+Each package is a COPR SCM package using the `make_srpm` method, with webhook rebuilds turned off. The GitHub Actions workflows start every build through COPR's API (see README.md, "Automated Builds"), always for one chroot at a time. COPR runs `make -f .copr/Makefile srpm outdir=<dir> spec=<spec>` as root in a mock chroot. For `kmod-yeetmouse.spec` the Makefile installs `kmodtool` and `kernel-devel` first, because the spec needs both at parse time. That covers only the SRPM step. COPR then builds the binary packages in the target chroot and parses the spec again before any `BuildRequires` are installed, so both packages must also be in that chroot's buildroot.
 
-Every enabled chroot needs `kmodtool` and `kernel-devel` as additional buildroot packages. Without them the kmod build fails with `kmodtool: command not found`. Set them whenever a chroot is added, for example when Fedora 45 is added, and check the result:
+### Fedora releases
+
+The project has one `fedora-NN-x86_64` chroot per Fedora release, plus `fedora-rawhide-x86_64`, which is never built in. "Follow Fedora branching" stays on. When Fedora branches, COPR copies the Rawhide chroot, including its additional packages, into the new `fedora-NN-x86_64` chroot. It becomes usable when COPR's admins activate that release for everyone. No workflow edits chroots or names a target chroot. The only per-release values in the repository are the kmod spec's kernel pins, which the pollers maintain.
+
+`.github/scripts/copr_build.py ready-chroots` decides where to build. A chroot is ready when its name is `fedora-<number>-x86_64`, COPR lists it as active, it has both `kmodtool` and `kernel-devel` as additional packages, and it is not scheduled for deletion. A release that reaches end of life drops out by itself. Every workflow ends with `check-chroots`, which fails the run when an active chroot is not ready, or when COPR offers a newer Fedora release than the project has (branching did not reach it). The fix is to add or repair the chroot by hand:
 
 ```bash
-copr-cli edit-chroot abirkel/yeetmouse/fedora-44-x86_64 --packages "kmodtool kernel-devel"
-curl -s "https://copr.fedorainfracloud.org/api_3/project-chroot?ownername=abirkel&projectname=yeetmouse&chrootname=fedora-44-x86_64" | python3 -c 'import sys, json; print(json.load(sys.stdin)["additional_packages"])'
+copr-cli edit-chroot abirkel/yeetmouse/fedora-45-x86_64 --packages "kmodtool kernel-devel"
+curl -s "https://copr.fedorainfracloud.org/api_3/project-chroot?ownername=abirkel&projectname=yeetmouse&chrootname=fedora-45-x86_64" | python3 -c 'import sys, json; print(json.load(sys.stdin)["additional_packages"])'
 ```
 
-A new Fedora release is not added automatically, because the project has no Rawhide chroot for COPR's branching to copy. Adding one also means updating `COPR_CHROOT` in the three workflows.
+Keep the Rawhide chroot's packages correct: a chroot copied at branching keeps what Rawhide had at that moment, and later Rawhide edits do not reach it.
+
+### Kernel pins
+
+`kmod-yeetmouse.spec` carries one pin per Fedora release, for example `%global target_kernel_fc45 7.2.9-301.fc45.x86_64`. The binary build fails before producing any package when the chroot's `kernel-devel` is not exactly the pin for its release. That happens when COPR's buildroot lags Fedora's mirrors. Because nothing was published, the same version-release is retried on the next poll, and no Release bump is needed. SRPM generation skips the check (`.copr/Makefile` defines `_yeetmouse_srpm`), and so does a local build on a release with no pin.
+
+The kernel poller (every 3 hours) reads each ready release's newest `kernel-devel` from its own `quay.io/fedora/fedora:NN` container. When a kernel is newer than its pin, or a ready release has no pin yet, it moves the pins, raises the kmod Release in the same commit, and pushes. Pins only move forward, so a container landing on a lagging mirror never moves one back. The upstream poller refreshes the pins in the same commit as a new snapshot. A package still unpublished in a ready chroot fails the run once its first failed build at the current version-release in that chroot is 24 hours old (read from COPR's build history). Earlier failures are warnings and are retried. A kmod already published for a different kernel at the same version-release, or a ready release with no pin, fails at once.
+
+One kmod Release covers every release, so a new kernel in one Fedora release also rebuilds the kmod for the others, at a new version-release. That costs a build but never republishes a version.
 
 `kmod-yeetmouse.spec` has no `%files`, `%post` or `%postun` for its main package, because kmodtool generates them for each `kmod-yeetmouse-<kernel>` package. When the Fedora target or the kmodtool version changes, check a real COPR build's package list, file ownership and scriptlets (`rpm -qp --list --scripts`) to confirm that each per-kernel package still owns its module and runs `depmod`, and that no binary package other than `kmod-yeetmouse-<kernel>` and `yeetmouse-kmod-common` is built. The source package is named `yeetmouse-kmod`, so that name is expected only as the `.src.rpm`.
 

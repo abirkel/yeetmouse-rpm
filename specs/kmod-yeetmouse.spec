@@ -15,7 +15,7 @@
 
 Name:           %{kmod_name}-kmod
 Version:        0^%{snapdate}git%{shortcommit}
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        YeetMouse mouse acceleration kernel module
 License:        GPL-2.0-or-later
 URL:            https://github.com/AndyFilter/YeetMouse
@@ -45,7 +45,7 @@ BuildRequires:  make
 # nothing was published, the same version-release can simply be retried.
 # SRPM generation (.copr/Makefile defines _yeetmouse_srpm), local builds that
 # define yeetmouse_skip_pin, and releases with no pin skip the check.
-%global target_kernel_fc44 7.2.9-201.fc44.x86_64
+%global target_kernel_fc44 7.2.10-200.fc44.x86_64
 %global target_kernel_fc45 7.2.9-300.fc45.x86_64
 %{lua:
 if rpm.expand("%{?_yeetmouse_srpm}%{?yeetmouse_skip_pin}") == "" then
